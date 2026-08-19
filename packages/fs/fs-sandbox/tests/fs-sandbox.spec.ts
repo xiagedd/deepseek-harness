@@ -1,6 +1,6 @@
 /**
  * Tests for the sandbox-enforcing filesystem backend: the per-call policy fence
- * on write/edit (read-only denies, workspace-write contains, danger-full-access
+ * on mutations (read-only denies, workspace-write contains, danger-full-access
  * passes through), reads always passing through, the capability fact, and the
  * containment matrix — `..` traversal, absolute paths outside, and symlink
  * escapes (a symlinked directory inside the workspace pointing out, and a new
@@ -80,6 +80,21 @@ describe('read-only', () => {
     expect(await readFile(path, 'utf8')).toBe('original')
   })
 
+  it('denies mkdir, rename, delete, and copy, leaving the workspace unchanged', async () => {
+    const file = join(workspace, 'keep.txt')
+    await writeFile(file, 'keep')
+    await expect(fs.mkdir(await target(join(workspace, 'denied-dir')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.rename(await target(file), await target(join(workspace, 'renamed.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.delete(await target(file))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.copy(await target(file), await target(join(workspace, 'copied.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(workspace, 'denied-dir'))).toBe(false)
+    expect(existsSync(join(workspace, 'renamed.txt'))).toBe(false)
+    expect(existsSync(join(workspace, 'copied.txt'))).toBe(false)
+    expect(await readFile(file, 'utf8')).toBe('keep')
+  })
+
   it('allows reads (every mode permits reading)', async () => {
     const path = join(workspace, 'readable.txt')
     await writeFile(path, 'hello')
@@ -144,6 +159,37 @@ describe('workspace-write containment', () => {
     const outcome = await fs.editText(await target(path), { oldString: 'original', newString: 'changed', replaceAll: false })
     expect(outcome.after).toBe('changed')
     expect(await readFile(path, 'utf8')).toBe('changed')
+  })
+
+  it('mkdir, rename, delete, and copy inside the workspace land', async () => {
+    await fs.mkdir(await target(join(workspace, 'fresh')))
+    expect((await fs.stat(await target(join(workspace, 'fresh'))))?.type).toBe('directory')
+
+    const file = join(workspace, 'move.txt')
+    await writeFile(file, 'payload')
+    await fs.rename(await target(file), await target(join(workspace, 'moved.txt')))
+    expect(existsSync(file)).toBe(false)
+    expect(await readFile(join(workspace, 'moved.txt'), 'utf8')).toBe('payload')
+
+    await fs.copy(await target(join(workspace, 'moved.txt')), await target(join(workspace, 'copied.txt')))
+    expect(await readFile(join(workspace, 'copied.txt'), 'utf8')).toBe('payload')
+
+    await fs.delete(await target(join(workspace, 'copied.txt')))
+    expect(existsSync(join(workspace, 'copied.txt'))).toBe(false)
+  })
+
+  it('mkdir, rename, delete, and copy outside the workspace are denied', async () => {
+    const outsideFile = join(outside, 'keep.txt')
+    await writeFile(outsideFile, 'keep')
+    await expect(fs.mkdir(await target(join(outside, 'escape-dir')))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.rename(await target(outsideFile), await target(join(outside, 'renamed.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.delete(await target(outsideFile))).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.copy(await target(outsideFile), await target(join(workspace, 'stolen.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'escape-dir'))).toBe(false)
+    expect(await readFile(outsideFile, 'utf8')).toBe('keep')
+    expect(existsSync(join(workspace, 'stolen.txt'))).toBe(false)
   })
 
   it('mutates the freshly checked identity, not a stale outside targetKey (TOCTOU direction)', async () => {

@@ -15,9 +15,17 @@ import {
   sessionUpdateQueueRequestSchema, sessionUpdateQueueValueSchema,
 } from '../src/api/sessions.schema.ts'
 import {
+  hostCopyRequestSchema, hostCopyValueSchema,
   hostCreateDirectoryRequestSchema, hostCreateDirectoryValueSchema,
+  hostDeleteRequestSchema, hostDeleteValueSchema,
   hostDescribeRequestSchema, hostDescribeValueSchema,
   hostListDirectoryRequestSchema, hostListDirectoryValueSchema,
+  hostListEntriesRequestSchema, hostListEntriesValueSchema,
+  hostMkdirRequestSchema, hostMkdirValueSchema,
+  hostRenameRequestSchema, hostRenameValueSchema,
+  hostRestartWebRequestSchema, hostRestartWebValueSchema,
+  hostWriteTextRequestSchema, hostWriteTextValueSchema,
+  hostReadTextRequestSchema, hostReadTextValueSchema,
 } from '../src/api/host.schema.ts'
 import {
   workspaceArchiveSessionRequestSchema, workspaceArchiveSessionValueSchema,
@@ -79,6 +87,7 @@ describe('rpcErrorSchema', () => {
     expect(rpcErrorSchema.parse({ code: 'title-invalid', message: 'm', details: { sessionId: 's' } }).code).toBe('title-invalid')
     // The credentials producer still emits this code, so the branch has to stay.
     expect(rpcErrorSchema.parse({ code: 'credential-rejected', message: 'm', details: { ref: 'r' } }).code).toBe('credential-rejected')
+    expect(rpcErrorSchema.parse({ code: 'fs-failed', message: 'm', details: { path: '/x', reason: 'FS_NOT_FOUND' } }).code).toBe('fs-failed')
     expect(rpcErrorSchema.parse({ code: 'internal', message: 'm', details: {} }).code).toBe('internal')
   })
 
@@ -341,6 +350,46 @@ describe('host domain schemas', () => {
       expect(() => hostCreateDirectoryRequestSchema.parse({ path: '/x', name })).toThrow()
     }
     expect(hostCreateDirectoryValueSchema.parse({ path: '/x/new' })).toEqual({ path: '/x/new' })
+  })
+
+  it('validates workspace file-tree listing and mutation payloads', () => {
+    expect(() => hostListEntriesRequestSchema.parse({})).toThrow()
+    expect(hostListEntriesRequestSchema.parse({ path: '/ws' })).toEqual({ path: '/ws' })
+    const listing = hostListEntriesValueSchema.parse({
+      path: '/ws',
+      entries: [
+        { name: 'a.txt', path: '/ws/a.txt', type: 'file', hidden: false, size: 4 },
+        { name: 'src', path: '/ws/src', type: 'directory', hidden: false },
+      ],
+    })
+    expect(listing.entries.map(entry => entry.type)).toEqual(['file', 'directory'])
+    expect(hostMkdirRequestSchema.parse({ path: '/ws/new' })).toEqual({ path: '/ws/new' })
+    expect(hostMkdirValueSchema.parse({ path: '/ws/new' })).toEqual({ path: '/ws/new' })
+    expect(hostRenameRequestSchema.parse({ from: '/a', to: '/b' })).toEqual({ from: '/a', to: '/b' })
+    expect(hostRenameValueSchema.parse({ path: '/b' })).toEqual({ path: '/b' })
+    expect(hostDeleteRequestSchema.parse({ path: '/a' })).toEqual({ path: '/a' })
+    expect(hostDeleteValueSchema.parse({ deleted: true })).toEqual({ deleted: true })
+    expect(hostCopyRequestSchema.parse({ from: '/a', to: '/b' })).toEqual({ from: '/a', to: '/b' })
+    expect(hostCopyValueSchema.parse({ path: '/b' })).toEqual({ path: '/b' })
+    expect(() => hostWriteTextRequestSchema.parse({})).toThrow()
+    expect(hostWriteTextRequestSchema.parse({ path: '/ws/a.txt' })).toEqual({ path: '/ws/a.txt' })
+    expect(hostWriteTextRequestSchema.parse({ path: '/ws/a.txt', content: 'hi' }))
+      .toEqual({ path: '/ws/a.txt', content: 'hi' })
+    expect(hostWriteTextRequestSchema.parse({ path: '/ws/a.txt', content: '' }))
+      .toEqual({ path: '/ws/a.txt', content: '' })
+    expect(hostWriteTextValueSchema.parse({ path: '/ws/a.txt' })).toEqual({ path: '/ws/a.txt' })
+    expect(() => hostReadTextRequestSchema.parse({})).toThrow()
+    expect(hostReadTextRequestSchema.parse({ path: '/ws/a.txt' })).toEqual({ path: '/ws/a.txt' })
+    expect(hostReadTextValueSchema.parse({ path: '/ws/a.txt', content: 'hi' }))
+      .toEqual({ path: '/ws/a.txt', content: 'hi' })
+    expect(() => hostListEntriesValueSchema.parse({ path: '/ws', entries: [{ name: 'x', path: '/ws/x', hidden: false }] })).toThrow()
+    expect(hostRestartWebRequestSchema.parse({})).toEqual({})
+    expect(hostRestartWebRequestSchema.parse({ port: 3080 })).toEqual({ port: 3080 })
+    expect(() => hostRestartWebRequestSchema.parse({ port: 0 })).toThrow()
+    expect(() => hostRestartWebRequestSchema.parse({ port: 3080, command: 'rm' })).toThrow()
+    expect(() => hostRestartWebRequestSchema.parse({ argv: ['--foreground'] })).toThrow()
+    expect(hostRestartWebValueSchema.parse({ accepted: true, port: 3080 }))
+      .toEqual({ accepted: true, port: 3080 })
   })
 })
 

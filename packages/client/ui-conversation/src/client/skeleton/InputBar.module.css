@@ -1,10 +1,136 @@
-/* One-glyph font: maps ONLY U+FFFC to a blank 4em-advance glyph (every other
-   codepoint falls through to the next family). Loaded first in the composer
-   font stack, it gives the placeholder a real cell width INSIDE the textarea,
-   so the backdrop chip (same char, same stack) matches it by construction —
-   the two layers cannot drift and the chip gets a usable label cell. */
+/* One-glyph font: maps ONLY U+FFFC to a blank glyph whose advance is the chip
+   cell (every other codepoint falls through to the next family). Loaded first
+   in the composer font stack, it gives the placeholder a real cell width
+   INSIDE the textarea, so the backdrop chip (same char, same stack) matches it
+   by construction — the two layers cannot drift and the chip gets a usable
+   label cell.
+
+   One face per rung of the cell ladder: the glyph's own advance is 4em and
+   `size-adjust` scales the face, so rung N carries an advance of 2(N+1)em —
+   4em to 26em in 2em steps. A textarea cannot give two placeholders two widths
+   (one char, one font, one size), so the composer picks ONE rung per draft from
+   its widest chip label (chipCellStep) and swaps the family on all three layers
+   at once. Two-em rungs keep the transparent slack after a pill under half a
+   base cell; a label past the last rung ellipsizes inside its pill and keeps
+   the full path on the chip title. The src repeats verbatim because @font-face
+   has no way to alias another face's source; only the metric lines differ. An
+   engine without size-adjust support keeps every rung at 4em: the pill clips to
+   its cell, exactly the pre-ladder behavior, and never drifts.
+
+   `size-adjust` scales EVERY metric of the face, ascent and descent included,
+   and the overrides are read through that same multiplier — so each face
+   divides its overrides by its own scale to pin the vertical metrics back to
+   ascent 0.8em / descent 0.2em, i.e. a one-em content area at every rung. This
+   is not cosmetic: the content area of an inline box positions the baseline
+   inside its (fixed) line box, and an unpinned face makes it several em tall,
+   which drops the glyphs of all three layers — and the chip label inside its
+   own clipping box — far below the box that paints them. */
+
 @font-face {
-  font-family: 'DshChipCell';
+  font-family: 'DshChipCell1';
+  size-adjust: 100%;
+  ascent-override: 80%;
+  descent-override: 20%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell2';
+  size-adjust: 150%;
+  ascent-override: 53.333%;
+  descent-override: 13.333%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell3';
+  size-adjust: 200%;
+  ascent-override: 40%;
+  descent-override: 10%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell4';
+  size-adjust: 250%;
+  ascent-override: 32%;
+  descent-override: 8%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell5';
+  size-adjust: 300%;
+  ascent-override: 26.667%;
+  descent-override: 6.667%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell6';
+  size-adjust: 350%;
+  ascent-override: 22.857%;
+  descent-override: 5.714%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell7';
+  size-adjust: 400%;
+  ascent-override: 20%;
+  descent-override: 5%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell8';
+  size-adjust: 450%;
+  ascent-override: 17.778%;
+  descent-override: 4.444%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell9';
+  size-adjust: 500%;
+  ascent-override: 16%;
+  descent-override: 4%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell10';
+  size-adjust: 550%;
+  ascent-override: 14.545%;
+  descent-override: 3.636%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell11';
+  size-adjust: 600%;
+  ascent-override: 13.333%;
+  descent-override: 3.333%;
+  line-gap-override: 0%;
+  src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
+}
+
+@font-face {
+  font-family: 'DshChipCell12';
+  size-adjust: 650%;
+  ascent-override: 12.308%;
+  descent-override: 3.077%;
+  line-gap-override: 0%;
   src: url('data:font/ttf;base64,AAEAAAAKAIAAAwAgT1MvMkT8SmIAAAEoAAAAYGNtYXAADQBPAAABkAAAADRnbHlmAAAAAAAAAcwAAAABaGVhZCwtPGoAAACsAAAANmhoZWEDIg7bAAAA5AAAACRobXR4EZQAAAAAAYgAAAAIbG9jYQAAAAAAAAHEAAAABm1heHAAAwACAAABCAAAACBuYW1lvljk2gAAAdAAAABscG9zdNNweNQAAAI8AAAALQABAAAAAQAAdia1tV8PPPUAAwPoAAAAAOaLfcUAAAAA5ot9xQAAAAAAAAAAAAAAAwACAAAAAAAAAAEAAAMg/zgAAA+gAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAACAAEAAAACAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAwjKAZAABQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAPz8/PwAA//z//AMg/zgAAAMgAMgAAAAAAAAAAAAAAAAAAAAgAAAB9AAAD6AAAAAAAAIAAAADAAAAFAADAAEAAAAUAAQAIAAAAAQABAABAAD//P//AAD//P//AAUAAQAAAAAAAAAAAAAAAAAAAAAAAAAEADYAAQAAAAAAAQALAAAAAQAAAAAAAgAHAAsAAwABBAkAAQAWABIAAwABBAkAAgAOAChEc2hDaGlwQ2VsbFJlZ3VsYXIARABzAGgAQwBoAGkAcABDAGUAbABsAFIAZQBnAHUAbABhAHIAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAABAgZvYmpyZXAAAAA=') format('truetype');
 }
 
@@ -157,6 +283,60 @@
    MUST share font, line-height, padding and wrapping rules or heights diverge. */
 .grow {
   position: relative;
+  /* The chip cell's step, published to all three text layers at once so the
+     placeholder advance can never differ between them. InputBar sets
+     data-chip-cell from chipCellStep(); the default is the base cell. */
+  --dsh-chip-cell-family: 'DshChipCell1';
+  /* Chip pill box and the text line that has to hold it. The line exceeds the
+     pill on both sides so a chip never touches the line above or below, and
+     the card's own 24px text line is only raised while a chip is present —
+     a chip-free draft keeps the figma text metric exactly. */
+  --dsh-chip-pill-height: 32px;
+  --dsh-chip-line-height: 38px;
+}
+
+.grow[data-chip-cell='2'] {
+  --dsh-chip-cell-family: 'DshChipCell2';
+}
+
+.grow[data-chip-cell='3'] {
+  --dsh-chip-cell-family: 'DshChipCell3';
+}
+
+.grow[data-chip-cell='4'] {
+  --dsh-chip-cell-family: 'DshChipCell4';
+}
+
+.grow[data-chip-cell='5'] {
+  --dsh-chip-cell-family: 'DshChipCell5';
+}
+
+.grow[data-chip-cell='6'] {
+  --dsh-chip-cell-family: 'DshChipCell6';
+}
+
+.grow[data-chip-cell='7'] {
+  --dsh-chip-cell-family: 'DshChipCell7';
+}
+
+.grow[data-chip-cell='8'] {
+  --dsh-chip-cell-family: 'DshChipCell8';
+}
+
+.grow[data-chip-cell='9'] {
+  --dsh-chip-cell-family: 'DshChipCell9';
+}
+
+.grow[data-chip-cell='10'] {
+  --dsh-chip-cell-family: 'DshChipCell10';
+}
+
+.grow[data-chip-cell='11'] {
+  --dsh-chip-cell-family: 'DshChipCell11';
+}
+
+.grow[data-chip-cell='12'] {
+  --dsh-chip-cell-family: 'DshChipCell12';
 }
 
 /* Decoration backdrop: same metrics as the textarea, transparent glyphs; only
@@ -228,10 +408,11 @@
   /* figma .InputText 34:10434: pl 16 / pr 12 / pt 4. Backdrop MUST share these
      metrics or the highlight ranges drift off the glyphs. */
   padding: 4px 12px 0 16px;
-  /* DshChipCell first: ONLY U+FFFC resolves there (4em blank cell — the chip
-     slot); everything else falls through to the app stack. All three layers
-     share the stack, so placeholder advances agree by construction. */
-  font-family: 'DshChipCell', var(--dsw-font-family);
+  /* The stepped cell face first: ONLY U+FFFC resolves there (a blank cell —
+     the chip slot); everything else falls through to the app stack. All three
+     layers read the same step variable, so placeholder advances agree by
+     construction at every step. */
+  font-family: var(--dsh-chip-cell-family), var(--dsw-font-family);
   font-size: inherit;
   /* Three consumers, not two: the mirror sizes the stack, the layers must break
      lines identically, and the caret reveal parses this value to step one line
@@ -251,6 +432,19 @@
      it: WebKit reserves gutter space for an overflow-y:auto textarea and not
      for the overflow:hidden layers beside it, leaving them 8px apart
      (768 against 776) — worth 2 to 5 wrapped lines on a long draft. */
+}
+
+/* A draft holding at least one chip runs at the taller chip line so the pill
+   fits inside its own line box instead of overlapping its neighbours. All
+   THREE layers take the value together — the caret rides the textarea's own
+   line boxes, the mirror decides the stack height, and the backdrop paints the
+   pill, so a value that reached only two of them would drift the caret and
+   mis-place every chip. It stays a px length because the caret-reveal parses
+   the computed line-height to step one line down. */
+.grow[data-has-chip] .input,
+.grow[data-has-chip] .mirror,
+.grow[data-has-chip] .backdrop {
+  line-height: var(--dsh-chip-line-height);
 }
 
 /* figma 34:10434: #ADB2B8 light / #81858C dark — the caption pair exactly. */
@@ -437,14 +631,12 @@
 /* Reference chip: rendered in the backdrop at the placeholder offset. Hard
    alignment constraint: the chip's advance must equal the textarea's U+FFFC
    advance EXACTLY or every glyph after it drifts (caret/selection follow the
-   textarea character stream). The ::before renders the same U+FFFC through
-   the same font stack (DshChipCell 4em cell), so both layers agree by
-   construction — no measured widths. The label overlays the cell, clipped
-   with an ellipsis; the full name rides the title tooltip. */
+   textarea character stream). This element IS that advance and nothing else:
+   its ::before renders the same U+FFFC through the same stepped font stack, so
+   both layers agree by construction — no measured widths. Everything visible
+   hangs off it absolutely and cannot change layout. */
 .chip {
   position: relative;
-  border-radius: 6px;
-  background: rgba(97, 135, 216, 0.22);
 }
 
 .chip::before {
@@ -452,24 +644,105 @@
   color: transparent;
 }
 
-.chipLabel {
-  /* Compensated-scale centering: overflow clipping happens BEFORE transform,
-     so the box is laid out at 1/0.72 of the cell and scaled back down — the
-     clip edge then lands on the visual cell edge, not mid-glyph. */
+/* The visible pill: content-sized, so a short name never paints as a
+   half-empty box when a longer chip in the same draft raised the step. Capped
+   at the cell it stands on — a name past the widest step ellipsizes inside the
+   pill instead of running under the following glyphs, with the full path on
+   the chip title. */
+.chipPill {
   position: absolute;
-  left: 50%;
   top: 50%;
-  width: calc(100% / 0.72 - 10px);
+  left: 0;
   display: flex;
+  box-sizing: border-box;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  color: var(--dsw-alias-label-primary);
-  white-space: nowrap;
-  transform: translate(-50%, -50%) scale(0.72);
+  gap: 3px;
+  /* Cap at the cell it stands on so a name past the widest step ellipsizes
+     inside the pill instead of running under the following glyphs. The pill
+     itself is content-sized up to that cap, so its width tracks the actual
+     basename. */
+  max-width: 100%;
+  height: var(--dsh-chip-pill-height);
+  padding: 0 5px 0 10px;
+  border-radius: 10px;
+  background: rgba(97, 135, 216, 0.22);
+  transform: translateY(-50%);
 }
 
-.chipInvalid {
+/* Left-aligned name, clipped with a visible ellipsis only when the widest step
+   still cannot hold it. It names the app family directly instead of inheriting
+   the layers' stack: the label carries no placeholder, so the cell face would
+   only lend it ITS metrics, and a stepped face's metrics decide where the
+   glyphs sit inside this clipping box. line-height holds the full glyph box
+   (ascenders and descenders) so capital letters are never vertically clipped. */
+.chipLabel {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Same family as AttachmentRail's ×: contrast circle, no layout advance of its
+   own (the pill it sits in is absolute over the cell). Always visible so a
+   path chip is obviously dismissible. It paints above the textarea (z-index)
+   and re-enables pointer events inside the pointer-inert backdrop, so it
+   answers hover, press, and click itself; InputBar's pointerdown hit-test on
+   the textarea stays as a fallback for the surrounding cell. */
+.chipRemove {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--dsw-alias-button-contrast-fill);
+  color: var(--dsw-alias-label-primary-inverted);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 100ms ease;
+}
+
+.chipRemove:hover,
+.chipRemove:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+/* Pressed feedback: same solid tint plus a small squeeze so the click reads. */
+.chipRemove:active {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+  transform: scale(0.88);
+}
+
+/* A chip that names a workspace file answers the pointer itself: the pill
+   paints above the (transparent) textarea and takes the click that reveals the
+   file, so the gesture cannot depend on a hit-test through the box. The ring is
+   a token, keeping the hover state color-literal-free. */
+.chipReveal {
+  z-index: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.chipReveal:hover {
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-business-primary);
+}
+
+.chipRemove:focus-visible {
+  outline: 1px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.chipInvalid .chipPill {
   background: rgba(216, 97, 97, 0.2);
   text-decoration: line-through;
   opacity: 0.7;

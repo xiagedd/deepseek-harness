@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-18-explorer-three-state-folder-glyph.md
+2026-08-18-explorer-three-state-folder-glyph.md: bdbb70a372f55d2350c638ad5e5349647e290fba
+2026-08-18-explorer-three-state-folder-glyph.zh.md: 2944e20d863f492f552b8dc2c26d02f98e5df324

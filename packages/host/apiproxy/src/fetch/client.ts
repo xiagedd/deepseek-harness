@@ -15,7 +15,10 @@ import { rpcReceiptSchema, serverRequestSchema, serverResponseSchema } from '../
 import { hostFrameSchema, muxFrameSchema } from '../api/events.schema.ts'
 import {
   hostCreateDirectoryValueSchema, hostDescribeValueSchema,
-  hostListDirectoryValueSchema, hostOpenPathValueSchema, hostPickDirectoryValueSchema,
+  hostListDirectoryValueSchema, hostListEntriesValueSchema, hostSearchEntriesValueSchema, hostMkdirValueSchema,
+  hostOpenPathValueSchema, hostPickDirectoryValueSchema, hostRenameValueSchema,
+  hostDeleteValueSchema, hostCopyValueSchema, hostWriteTextValueSchema, hostReadTextValueSchema,
+  hostRevealPathValueSchema, hostRestartWebValueSchema,
 } from '../api/host.schema.ts'
 import {
   sessionCancelValueSchema,
@@ -110,7 +113,17 @@ export interface IApiClient {
     pickDirectory(payload: RequestPayload<'host.pickDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.pickDirectory'>>>
     listDirectory(payload: RequestPayload<'host.listDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.listDirectory'>>>
     createDirectory(payload: RequestPayload<'host.createDirectory'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.createDirectory'>>>
+    listEntries(payload: RequestPayload<'host.listEntries'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.listEntries'>>>
+    searchEntries(payload: RequestPayload<'host.searchEntries'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.searchEntries'>>>
+    mkdir(payload: RequestPayload<'host.mkdir'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.mkdir'>>>
+    rename(payload: RequestPayload<'host.rename'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.rename'>>>
+    delete(payload: RequestPayload<'host.delete'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.delete'>>>
+    copy(payload: RequestPayload<'host.copy'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.copy'>>>
+    writeText(payload: RequestPayload<'host.writeText'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.writeText'>>>
+    readText(payload: RequestPayload<'host.readText'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.readText'>>>
     openPath(payload: RequestPayload<'host.openPath'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.openPath'>>>
+    revealPath(payload: RequestPayload<'host.revealPath'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.revealPath'>>>
+    restartWeb(payload: RequestPayload<'host.restartWeb'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'host.restartWeb'>>>
   }
   workspace: {
     list(payload: RequestPayload<'workspace.list'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'workspace.list'>>>
@@ -190,7 +203,17 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'host.pickDirectory': hostPickDirectoryValueSchema,
   'host.listDirectory': hostListDirectoryValueSchema,
   'host.createDirectory': hostCreateDirectoryValueSchema,
+  'host.listEntries': hostListEntriesValueSchema,
+  'host.searchEntries': hostSearchEntriesValueSchema,
+  'host.mkdir': hostMkdirValueSchema,
+  'host.rename': hostRenameValueSchema,
+  'host.delete': hostDeleteValueSchema,
+  'host.copy': hostCopyValueSchema,
+  'host.writeText': hostWriteTextValueSchema,
+  'host.readText': hostReadTextValueSchema,
   'host.openPath': hostOpenPathValueSchema,
+  'host.revealPath': hostRevealPathValueSchema,
+  'host.restartWeb': hostRestartWebValueSchema,
   'workspace.list': workspaceListValueSchema,
   'workspace.create': workspaceCreateValueSchema,
   'workspace.rename': workspaceRenameValueSchema,
@@ -440,7 +463,17 @@ export abstract class AbstractApiClient implements IApiClient {
     ),
     listDirectory: (payload, signal) => this.callUnary('host.listDirectory', payload, signal),
     createDirectory: (payload, signal) => this.callUnary('host.createDirectory', payload, signal),
+    listEntries: (payload, signal) => this.callUnary('host.listEntries', payload, signal),
+    searchEntries: (payload, signal) => this.callUnary('host.searchEntries', payload, signal),
+    mkdir: (payload, signal) => this.callUnary('host.mkdir', payload, signal),
+    rename: (payload, signal) => this.callUnary('host.rename', payload, signal),
+    delete: (payload, signal) => this.callUnary('host.delete', payload, signal),
+    copy: (payload, signal) => this.callUnary('host.copy', payload, signal),
+    writeText: (payload, signal) => this.callUnary('host.writeText', payload, signal),
+    readText: (payload, signal) => this.callUnary('host.readText', payload, signal),
     openPath: (payload, signal) => this.callUnary('host.openPath', payload, signal),
+    revealPath: (payload, signal) => this.callUnary('host.revealPath', payload, signal),
+    restartWeb: (payload, signal) => this.callUnary('host.restartWeb', payload, signal),
   }
 
   readonly workspace: IApiClient['workspace'] = {

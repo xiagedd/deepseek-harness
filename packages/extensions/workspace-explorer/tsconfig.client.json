@@ -1,0 +1,13 @@
+{
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
+  "files": ["src/client/index.ts", "src/client/ExplorerPanel.tsx"],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../client/connection/tsconfig.client.json" },
+    { "path": "../../client/runtime" },
+    { "path": "../../client/web-react" },
+    { "path": "../../client/ui-slots" },
+    { "path": "../../client/ui-conversation" }
+  ]
+}

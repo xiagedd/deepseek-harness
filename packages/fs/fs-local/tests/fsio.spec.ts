@@ -6,18 +6,23 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync } from 'node:fs'
 import { chmod, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile, mkdir, readdir, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import {
   applyLiteralEdit,
+  copyEntry,
+  deleteEntry,
   listDirectory,
+  makeDirectory,
   probe,
   probeNoFollow,
   readForEdit,
   readTextForDiff,
   readWholeText,
+  renameEntry,
   resolveLocalTarget,
   restoreLineEndings,
   streamWholeText,
@@ -925,5 +930,70 @@ describe('readForEdit + restoreLineEndings', () => {
     const pending = readForEdit(file, file, ac.signal)
     ac.abort()
     await expect(pending).rejects.toMatchObject({ code: 'FS_ABORTED' })
+  })
+})
+
+describe('structural mutations', () => {
+  it('makeDirectory creates one level and fails when the target already exists', async () => {
+    const path = join(dir, 'fresh')
+    await makeDirectory(localTarget(path))
+    expect((await probe(path))?.type).toBe('directory')
+    await expect(makeDirectory(localTarget(path))).rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+  })
+
+  it('makeDirectory fails when the parent is missing', async () => {
+    await expect(makeDirectory(localTarget(join(dir, 'no-parent', 'child'))))
+      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    expect(existsSync(join(dir, 'no-parent'))).toBe(false)
+  })
+
+  it('renameEntry moves a file and refuses an existing destination', async () => {
+    const from = join(dir, 'from.txt')
+    const to = join(dir, 'to.txt')
+    await writeFile(from, 'moved')
+    await renameEntry(localTarget(from), localTarget(to))
+    expect(await readFile(to, 'utf8')).toBe('moved')
+    expect(existsSync(from)).toBe(false)
+    await writeFile(join(dir, 'taken.txt'), 'keep')
+    await expect(renameEntry(localTarget(to), localTarget(join(dir, 'taken.txt'))))
+      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+  })
+
+  it('deleteEntry removes a file and a directory tree, and refuses a missing target', async () => {
+    const file = join(dir, 'gone.txt')
+    await writeFile(file, 'x')
+    await deleteEntry(localTarget(file))
+    expect(existsSync(file)).toBe(false)
+    await expect(deleteEntry(localTarget(file))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+
+    const tree = join(dir, 'tree')
+    await mkdir(join(tree, 'nested'), { recursive: true })
+    await writeFile(join(tree, 'nested', 'a.txt'), 'a')
+    await deleteEntry(localTarget(tree))
+    expect(existsSync(tree)).toBe(false)
+  })
+
+  it('copyEntry duplicates a file and refuses an existing destination', async () => {
+    const from = join(dir, 'src.txt')
+    const to = join(dir, 'dst.txt')
+    await writeFile(from, 'copy-me')
+    await copyEntry(localTarget(from), localTarget(to))
+    expect(await readFile(to, 'utf8')).toBe('copy-me')
+    expect(await readFile(from, 'utf8')).toBe('copy-me')
+    await expect(copyEntry(localTarget(from), localTarget(to)))
+      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+  })
+
+  it('honors a pre-aborted signal', async () => {
+    const aborted = AbortSignal.abort()
+    await expect(makeDirectory(localTarget(join(dir, 'aborted')), aborted))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    const file = join(dir, 'live.txt')
+    await writeFile(file, 'x')
+    await expect(renameEntry(localTarget(file), localTarget(join(dir, 'renamed.txt')), aborted))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(deleteEntry(localTarget(file), aborted)).rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(copyEntry(localTarget(file), localTarget(join(dir, 'copied.txt')), aborted))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
   })
 })

@@ -59,6 +59,11 @@ export interface IWorkspaces {
    */
   openPath(path: string): Promise<void>
   /**
+   * Reveal a filesystem path in the Host file manager with the item selected.
+   * @param path - absolute or host-resolvable path.
+   */
+  revealPath(path: string): Promise<void>
+  /**
    * Rename a Workspace.
    * @param workspaceId - target workspace.
    * @param title - the new display title.

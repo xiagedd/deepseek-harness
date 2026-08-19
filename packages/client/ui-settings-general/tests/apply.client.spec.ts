@@ -10,6 +10,8 @@ import { CloseLabel, HeaderContent, TriggerContent } from '../src/client/chrome.
 import { GeneralSection } from '../src/client/GeneralSection.tsx'
 import { SettingsDocumentAction } from '../src/client/SettingsDocumentAction.tsx'
 import type { SettingsDocumentActionInjected } from '../src/client/SettingsDocumentAction.tsx'
+import { RestartWebRow } from '../src/client/RestartWebRow.tsx'
+import type { RestartWebRowInjected } from '../src/client/RestartWebRow.tsx'
 
 // The service reads its initial locale from the browser; these specs assert
 // the shipped Chinese copy, so they state the browser they assume.
@@ -44,11 +46,18 @@ async function bench(isLoopback = true) {
     rpcId: 'settings-open' as never,
     result: { ok: true as const, value: { opened: true as const } },
   }))
+  const restartWeb = vi.fn(() => Promise.resolve({
+    rpcId: 'restart-web' as never,
+    result: { ok: true as const, value: { accepted: true as const, port: 3080 } },
+  }))
   ctx.provide('connection', {
-    api: { settings: { describe: settingsDescribe, openDocument: settingsOpenDocument } },
+    api: {
+      settings: { describe: settingsDescribe, openDocument: settingsOpenDocument },
+      host: { restartWeb },
+    },
     isLoopback,
   } as never)
-  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, settingsDescribe, settingsOpenDocument }
+  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, settingsDescribe, settingsOpenDocument, restartWeb }
 }
 
 /** Declare the shell's six child slots the way ui-settings' entry does. */
@@ -90,7 +99,8 @@ describe('ui-settings-general apply', () => {
     // The nav label is a locale-following thunk; owners resolve at read time.
     expect(resolveSlotLabel(entry.options.label)).toBe('通用设置')
     expect(before.slots.spec('settings.general.item')).toEqual({ kind: 'list', scope: 'root' })
-    expect(before.slots.entries('settings.general.item')).toEqual([])
+    expect(before.slots.entries('settings.general.item').map(e => e.options.id)).toEqual(['restart-web'])
+    expect(before.slots.entries('settings.general.item')[0]!.component).toBe(RestartWebRow)
     // The onboarding hole stays declared for feature-owned steps; this plugin
     // no longer seats one.
     expect(before.slots.entries('settings.onboarding')).toEqual([])
@@ -163,12 +173,13 @@ describe('ui-settings-general apply', () => {
     await vi.waitFor(() => { expect(b.settingsDescribe).toHaveBeenCalledTimes(2) })
   })
 
-  it('withholds the loopback-only document action off-loopback', async () => {
+  it('withholds the loopback-only document action and restart row off-loopback', async () => {
     const b = await bench(false)
     declare(b.slots)
     const fiber = b.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
     expect(b.slots.entries('settings.action')).toEqual([])
+    expect(b.slots.entries('settings.general.item')).toEqual([])
     expect(b.settingsDescribe).not.toHaveBeenCalled()
     await fiber.dispose()
     for (const [name] of SEATS) expect(b.slots.entries(name)).toEqual([])
@@ -188,12 +199,52 @@ describe('ui-settings-general apply', () => {
     for (const [name, component] of SEATS) {
       expect(b.slots.entries(name)[0]!.component).toBe(component)
     }
-    expect(b.slots.entries('settings.general.item')).toEqual([])
+    expect(b.slots.entries('settings.general.item').map(e => e.options.id)).toEqual(['restart-web'])
     expect(b.slots.spec('settings.general.item')).toEqual({ kind: 'list', scope: 'root' })
     // The recovered registrations still ride the locale path.
     b.locale.setLocale('en')
     expect(resolveSlotLabel(generalEntry(b.slots)!.options.label)).toBe('General')
     b.locale.setLocale('zh')
+  })
+
+  it('maps host.restartWeb accept, refusal, and a missing-method 404', async () => {
+    const b = await bench()
+    declare(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const injected = (b.slots.entries('settings.general.item')[0]!
+      .inject as unknown as () => RestartWebRowInjected)()
+    expect(await injected.restartWeb({})).toEqual({ ok: true, port: 3080 })
+    expect(b.restartWeb).toHaveBeenCalledWith({})
+    b.restartWeb.mockResolvedValueOnce({
+      rpcId: 'restart-web-denied' as never,
+      result: {
+        ok: false as const,
+        error: {
+          code: 'internal' as const,
+          message: 'host.restartWeb cannot find scripts/restart-dsh-web.mjs under /tmp',
+          details: {},
+        },
+      },
+    })
+    expect(await injected.restartWeb({ port: 3080 })).toEqual({
+      ok: false,
+      message: 'host.restartWeb cannot find scripts/restart-dsh-web.mjs under /tmp',
+    })
+    b.restartWeb.mockRejectedValueOnce(new Error('404 unknown method'))
+    expect(await injected.restartWeb({})).toEqual({
+      ok: false,
+      message: '当前服务还没有重启入口。请先在终端运行 pnpm run web:restart，之后即可用此按钮。',
+    })
+    b.restartWeb.mockRejectedValueOnce('carrier-down')
+    expect(await injected.restartWeb({})).toEqual({ ok: false, message: 'carrier-down' })
+    const fetchImpl = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
+    expect(await injected.waitUntilHealthy(20)).toBe(true)
+    fetchImpl.mockRestore()
+    const reload = vi.fn()
+    vi.stubGlobal('location', { reload })
+    injected.reload()
+    expect(reload).toHaveBeenCalledOnce()
+    vi.unstubAllGlobals()
   })
 
   it('removes every seat and the item declaration on teardown', async () => {

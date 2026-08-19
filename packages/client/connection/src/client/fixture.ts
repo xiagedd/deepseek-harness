@@ -2561,7 +2561,134 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         directoryTree.set(target, [])
         return ok(request, { path: target })
       },
+      listEntries: (request) => {
+        const target = request.payload.path
+        const children = childrenOf(target)
+        if (children === undefined) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot list ${target}: not in the fixture tree`,
+            details: { path: target, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        return ok(request, {
+          path: target,
+          entries: [...children].sort((a, b) => a.localeCompare(b))
+            .map(name => ({
+              name,
+              path: target === '/' ? `/${name}` : `${target}/${name}`,
+              type: 'directory' as const,
+              hidden: name.startsWith('.'),
+            })),
+        })
+      },
+      searchEntries: (request) => {
+        const root = request.payload.root
+        const query = request.payload.query.trim().toLowerCase()
+        const limit = request.payload.limit ?? 100
+        if (childrenOf(root) === undefined) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot search ${root}: not in the fixture tree`,
+            details: { path: root, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        const entries: { name: string; path: string; type: 'directory'; hidden: boolean }[] = []
+        const stack = [root]
+        while (stack.length > 0) {
+          const current = stack.pop()!
+          const children = childrenOf(current) ?? []
+          for (const name of children) {
+            const path = current === '/' ? `/${name}` : `${current}/${name}`
+            stack.push(path)
+            if (query !== '' && !name.toLowerCase().includes(query) && !path.toLowerCase().includes(query)) continue
+            entries.push({ name, path, type: 'directory', hidden: name.startsWith('.') })
+            if (entries.length > limit) {
+              return ok(request, { path: root, entries: entries.slice(0, limit), truncated: true })
+            }
+          }
+        }
+        return ok(request, { path: root, entries, truncated: false })
+      },
+      mkdir: (request) => {
+        const target = request.payload.path
+        const parent = target === '/' ? '/' : target.slice(0, Math.max(target.lastIndexOf('/'), 1))
+        const name = target.slice(target.lastIndexOf('/') + 1)
+        const children = childrenOf(parent)
+        if (children === undefined) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot mkdir ${target}: missing parent`,
+            details: { path: target, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        if (children.includes(name) || directoryTree.has(target)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `${target} already exists`,
+            details: { path: target, reason: 'FS_ALREADY_EXISTS' },
+          })
+        }
+        directoryTree.set(parent, [...children, name])
+        directoryTree.set(target, [])
+        return ok(request, { path: target })
+      },
+      rename: (request) => {
+        const { from, to } = request.payload
+        if (!directoryTree.has(from)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot rename ${from}: not found`,
+            details: { path: from, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        if (directoryTree.has(to)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `${to} already exists`,
+            details: { path: to, reason: 'FS_ALREADY_EXISTS' },
+          })
+        }
+        directoryTree.set(to, directoryTree.get(from) ?? [])
+        directoryTree.delete(from)
+        return ok(request, { path: to })
+      },
+      delete: (request) => {
+        const target = request.payload.path
+        if (!directoryTree.has(target)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot delete ${target}: not found`,
+            details: { path: target, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        directoryTree.delete(target)
+        return ok(request, { deleted: true as const })
+      },
+      copy: (request) => {
+        const { from, to } = request.payload
+        if (!directoryTree.has(from)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `cannot copy ${from}: not found`,
+            details: { path: from, reason: 'FS_NOT_FOUND' },
+          })
+        }
+        if (directoryTree.has(to)) {
+          return err(request, {
+            code: 'fs-failed',
+            message: `${to} already exists`,
+            details: { path: to, reason: 'FS_ALREADY_EXISTS' },
+          })
+        }
+        directoryTree.set(to, [...(directoryTree.get(from) ?? [])])
+        return ok(request, { path: to })
+      },
+      writeText: request => ok(request, { path: request.payload.path }),
+      readText: request => ok(request, { path: request.payload.path, content: `// ${request.payload.path}\n` }),
       openPath: request => ok(request, { opened: true as const }),
+      revealPath: request => ok(request, { revealed: true as const }),
+      restartWeb: request => ok(request, { accepted: true as const, port: request.payload.port ?? 3080 }),
     },
     workspace: {
       list: request => ok(request, {
@@ -3097,7 +3224,17 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'host.pickDirectory': return this.api.host.pickDirectory(request, new AbortController().signal)
       case 'host.listDirectory': return this.api.host.listDirectory(request, new AbortController().signal)
       case 'host.createDirectory': return this.api.host.createDirectory(request)
+      case 'host.listEntries': return this.api.host.listEntries(request, new AbortController().signal)
+      case 'host.searchEntries': return this.api.host.searchEntries(request, new AbortController().signal)
+      case 'host.mkdir': return this.api.host.mkdir(request)
+      case 'host.rename': return this.api.host.rename(request)
+      case 'host.delete': return this.api.host.delete(request)
+      case 'host.copy': return this.api.host.copy(request)
+      case 'host.writeText': return this.api.host.writeText(request)
+      case 'host.readText': return this.api.host.readText(request)
       case 'host.openPath': return this.api.host.openPath(request, new AbortController().signal)
+      case 'host.revealPath': return this.api.host.revealPath(request, new AbortController().signal)
+      case 'host.restartWeb': return this.api.host.restartWeb(request)
       case 'workspace.list': return this.api.workspace.list(request)
       case 'workspace.create': return this.api.workspace.create(request)
       case 'workspace.rename': return this.api.workspace.rename(request)

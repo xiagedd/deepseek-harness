@@ -30,7 +30,8 @@ import {
 // Type-only: brings the `ctx.tools` Context merge into this program (viewFor reads presenters).
 import {
   InvalidPresetIdError, PresetExistsError, PresetMountError,
-  PresetNotWritableError, resolveSessionPreset, UnknownPresetError,
+  PresetNotWritableError, resolveSessionPreset,
+  SETTINGS_NAMESPACE as AGENT_PRESET_SETTINGS_NAMESPACE, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -98,6 +99,7 @@ import type {
 } from '@deepseek-ai/dsh-user-questions'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import { DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
+import { FsError } from '@deepseek-ai/dsh-fs'
 import {
   ApiRemoteSessionNotFound as SessionNotFound,
   ApiRemoteSubagentSessionOwnership as SubagentSessionOwnership,
@@ -107,10 +109,35 @@ import {
   hasApiRemoteSubagentOwner,
   inspectApiRemoteSession,
 } from '@deepseek-ai/dsh-api-remotes'
-import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-path-opener.ts'
+import { canOpenNativePath, openNativePath, openNativeTextFile, revealNativePath } from './native-path-opener.ts'
+import {
+  resolveRestartListenPort, resolveRestartWebScript, scheduleRestartWeb, spawnRestartWeb,
+  type RestartWebSpawnRequest, type RestartWebSpawner,
+} from './restart-web.ts'
+import { DEFAULT_LIMIT, invalidateSearchIndexes, searchWorkspaceEntries } from './search-entries.ts'
+import {
+  isMetaName,
+  loadWorkspaceIgnore,
+  relativePosix as ignoreRelativePosix,
+  resolveIgnoreRoot,
+} from './workspace-ignore.ts'
 
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
+
+/**
+ * Non-model settings namespaces intentionally served to the Web client. The
+ * plugin-owned entries (`agent-loop`, `bash`, `web-search-deepseek`) are the
+ * host-plane sections the plugin configuration page edits; a namespace absent
+ * here answers `settings-not-exposed` even when its owner registered it, so
+ * adding a section to that page is a decision made here rather than by the
+ * registering plugin. Moving that declaration to `settings.register()`, so a
+ * plugin can expose its own configuration without a change in this package,
+ * is deferred work.
+ */
+const WEB_SETTINGS_NAMESPACES = [
+  'agent-loop', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'web-search-deepseek',
+] as const
 
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
@@ -137,25 +164,36 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
+  const limits = ctx.attachments.imageLimits
+  if (content.filter(part => part.type === 'image').length > limits.maxImagesPerMessage) {
+    throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+  }
   const prepared = content.map(part => part.type === 'text'
     ? part
     : { part, data: decodeBase64(part.data) })
   const images = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
-  const refs = await ctx.attachments.saveImages(images.map(image => ({
-    data: image.data,
-    mediaType: image.part.mediaType,
-    ...image.part.name === undefined ? {} : { name: image.part.name },
-  })))
+  const totalBytes = images.reduce((sum, image) => sum + image.data.byteLength, 0)
+  if (totalBytes > limits.maxMessageImageBytes) {
+    throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
+  }
+  for (const image of images) {
+    await ctx.attachments.validateImage({
+      data: image.data,
+      mediaType: image.part.mediaType,
+      ...image.part.name === undefined ? {} : { name: image.part.name },
+    })
+  }
   const blocks: ContentBlock[] = []
-  let imageIndex = 0
   for (const item of prepared) {
     if (!('data' in item)) {
       blocks.push({ type: 'text', text: item.text })
       continue
     }
-    const attachment = refs[imageIndex++]
-    /* v8 ignore next -- each prepared image supplied exactly one saveImages input and therefore one ordered ref. */
-    if (attachment === undefined) throw new Error('attachment batch result did not preserve input cardinality')
+    const attachment = await ctx.attachments.saveImage({
+      data: item.data,
+      mediaType: item.part.mediaType,
+      ...item.part.name === undefined ? {} : { name: item.part.name },
+    })
     blocks.push({ type: 'image', attachment })
   }
   return blocks
@@ -219,6 +257,16 @@ function referencedImage(events: readonly SessionEvent[], attachmentId: string):
   return undefined
 }
 
+/**
+ * Product settings intentionally exposed beside model-provider namespaces.
+ *
+ * The agent-preset namespace carries one field — which preset a session with
+ * no explicit choice is composed from — and both browser surfaces that offer
+ * that choice write it through `settings.update`, so it has to cross the
+ * configuration boundary or the pickers silently fail to persist.
+ */
+const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])
+
 /** Strict browser-zone profile: UTC or an IANA Area/Location-style identifier. */
 const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(?:\/[A-Za-z0-9_+.-]+)+$/
 
@@ -266,12 +314,7 @@ function paginate(
     if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
     count++
     const sources = (event as { sourceEventSeqs?: number[] }).sourceEventSeqs
-    let groupStart = event.seq
-    if (sources !== undefined) {
-      for (const source of sources) {
-        if (source < groupStart) groupStart = source
-      }
-    }
+    const groupStart = sources !== undefined && sources.length > 0 ? Math.min(event.seq, ...sources) : event.seq
     if (count >= maxMessages) {
       cut = groupStart
       break
@@ -601,6 +644,17 @@ function directoryError(error: unknown): RpcError {
   return { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} }
 }
 
+/** Map a `ctx.fs` failure onto the wire error vocabulary without swallowing the reason. */
+function fsFailed(error: unknown, path: string): RpcError {
+  if (error instanceof FsError) {
+    if (error.code === 'FS_ABORTED') {
+      return { code: 'cancelled', message: error.message, details: {} }
+    }
+    return { code: 'fs-failed', message: error.message, details: { path, reason: error.code } }
+  }
+  return { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} }
+}
+
 /** Resolved Agent model and project-directory defaults consumed by the API implementation. */
 export interface ApiProxyDefaults {
   /**
@@ -622,8 +676,27 @@ export interface ApiProxyDefaults {
   cwd: string
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
+  /** Native reveal-in-file-manager; injectable for carrier tests. */
+  revealPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native text-editor handoff; injectable for settings-document tests. */
   openTextFile?: (path: string, signal: AbortSignal) => Promise<void>
+  /**
+   * Resolve `scripts/restart-dsh-web.mjs` under the host cwd. Tests inject a
+   * fake so production `existsSync` is never the coverage path.
+   */
+  resolveRestartWebScript?: (cwd: string) => string | undefined
+  /**
+   * Detached spawn of the restart script. Tests inject a recorder; production
+   * must never run during unit tests.
+   */
+  spawnRestartWeb?: (request: RestartWebSpawnRequest, spawnImpl?: RestartWebSpawner) => void
+  /**
+   * Schedule the spawn after the unary response. Tests capture the callback
+   * and run it after asserting `accepted`; production uses a short timeout.
+   */
+  scheduleRestartWeb?: (work: () => void) => void
+  /** Listen port when the payload omits `port`; tests pin it without `webServer`. */
+  restartListenPort?: number
   /** Validated DEFLATE level for session-log ZIP entries; defaults to 6. */
   sessionExportCompressionLevel?: SessionLogCompressionLevel
   /** Maximum artifact size eligible for one cold blankness read. */
@@ -1873,6 +1946,37 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return openTarget(request, path, signal, open)
   }
 
+  /** Reveal one Host-resolved path in the file manager with the item selected. */
+  async function revealPath(
+    request: RpcRequest<unknown>, path: string, signal: AbortSignal,
+  ): Promise<RpcResponse<{ revealed: true }>> {
+    const reveal = defaults.revealPath
+      ?? ((target: string, revealSignal: AbortSignal) => revealNativePath(target, revealSignal))
+    // Logged on both outcomes: a file manager that raises no window leaves the
+    // Host no other trace, and the log is then what separates "this build has
+    // no host.revealPath" from "the reveal command ran and did nothing".
+    try {
+      await reveal(path, signal)
+      ctx.logger.info(`host.revealPath: revealed "${path}"`)
+      return ok(request, { revealed: true as const })
+    } catch (error: unknown) {
+      if (signal.aborted) {
+        return err(request, {
+          code: 'cancelled',
+          message: 'path reveal was aborted',
+          details: {},
+        })
+      }
+      const detail = error instanceof Error ? error.message : String(error)
+      ctx.logger.warn(`host.revealPath: reveal of "${path}" failed: ${detail}`)
+      return err(request, {
+        code: 'internal',
+        message: `path reveal failed: ${detail}`,
+        details: {},
+      })
+    }
+  }
+
   /** Open one Host-resolved text document in a native editor. */
   function openTextFile(
     request: RpcRequest<unknown>, path: string, signal: AbortSignal,
@@ -1908,11 +2012,39 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     }
   }
 
+  /** Settings namespaces whose changes can invalidate the model catalog. */
+  function modelProviderNamespaces(): Set<string> {
+    return new Set(ctx.llm.listConfigurableProviders().map(entry => entry.settingsNs))
+  }
+
+  /**
+   * The settings namespaces this proxy serves: configurable model providers
+   * plus the small explicit Web preference and product-owned allowlists. The
+   * settings seam remains general; a future registration does not become
+   * remotely readable or writable by default.
+   */
+  function exposedNamespaces(): Set<string> {
+    const exposed = modelProviderNamespaces()
+    for (const ns of WEB_SETTINGS_NAMESPACES) exposed.add(ns)
+    for (const ns of PRODUCT_SETTINGS_NAMESPACES) exposed.add(ns)
+    return exposed
+  }
+
+  /** Refuse a namespace outside the explicit configuration-client boundary. */
+  function notExposed(request: RpcRequest<unknown>, ns: string): RpcResponse<SettingsNamespaceView> {
+    return err(request, {
+      code: 'settings-not-exposed',
+      message: `settings namespace "${ns}" is not exposed to configuration clients`,
+      details: { ns },
+    })
+  }
+
   /**
    * Run one settings write (merge or wholesale replace) and acknowledge with
-   * the namespace's new redacted view. Every seam refusal — unknown or invalid
-   * namespace, read-only provider, schema validation, storage — becomes one
-   * `settings-rejected` carrying the seam's own message.
+   * the namespace's new redacted view. A namespace outside the configuration
+   * boundary is refused before the seam is touched; every seam refusal —
+   * unknown or invalid namespace, read-only provider, schema validation,
+   * storage — becomes one `settings-rejected` carrying the seam's own message.
    */
   async function settingsWrite(
     request: RpcRequest<unknown>,
@@ -1943,10 +2075,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     try {
       branded = settingsNamespace(ns)
     } catch (error: unknown) {
-      // A malformed name can address no registration, so it fails exactly as
-      // an unregistered one does.
+      // A malformed name is a client bug, reported as such; it could never be
+      // in the exposed set either, so naming the real fault costs no ground.
       return rejected(error)
     }
+    if (!exposedNamespaces().has(ns)) return notExposed(request, ns)
     try {
       if (mode === 'update') await settings.update(branded, section, expectedRevision)
       else if (mode === 'replace') await settings.replace(branded, section, expectedRevision)
@@ -2945,8 +3078,210 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
       },
 
+      async listEntries(request, signal) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, {
+            code: 'internal',
+            message: 'host.listEntries needs ctx.fs',
+            details: {},
+          })
+        }
+        try {
+          const target = await fs.resolve(request.payload.path, { signal })
+          const listed = await fs.listDir(target, signal)
+          const ignoreRoot = resolveIgnoreRoot(
+            target.displayPath,
+            request.payload.root,
+            ctx.workspaceRegistry.list().map(workspace => workspace.path),
+          )
+          const rules = await loadWorkspaceIgnore(ignoreRoot, async (path) => {
+            const file = await fs.resolve(path, { signal })
+            return fs.readText(file, signal)
+          })
+          const entries = listed.flatMap((entry) => {
+            if (entry.type !== 'directory' && isMetaName(entry.name)) return []
+            const row = {
+              name: entry.name,
+              path: entry.target.displayPath,
+              type: entry.type,
+              hidden: entry.name.startsWith('.'),
+              ...(entry.size !== undefined ? { size: entry.size } : {}),
+            }
+            const relative = ignoreRelativePosix(ignoreRoot, row.path)
+            if (rules.ignores(relative, entry.type === 'directory')) return []
+            return [row]
+          })
+          return ok(request, {
+            path: target.displayPath,
+            entries,
+          })
+        } catch (error: unknown) {
+          if (signal.aborted) {
+            return err(request, { code: 'cancelled', message: 'directory listing was aborted', details: {} })
+          }
+          return err(request, fsFailed(error, request.payload.path))
+        }
+      },
+
+      async searchEntries(request, signal) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, {
+            code: 'internal',
+            message: 'host.searchEntries needs ctx.fs',
+            details: {},
+          })
+        }
+        try {
+          const root = await fs.resolve(request.payload.root, { signal })
+          const limit = request.payload.limit ?? DEFAULT_LIMIT
+          const { entries, truncated } = await searchWorkspaceEntries(
+            async (dirPath, indexSignal) => {
+              const dir = await fs.resolve(dirPath, { signal: indexSignal })
+              return fs.listDir(dir, indexSignal)
+            },
+            async (filePath) => {
+              const file = await fs.resolve(filePath, { signal })
+              return fs.readText(file, signal)
+            },
+            root.displayPath,
+            request.payload.query,
+            limit,
+            signal,
+          )
+          return ok(request, { path: root.displayPath, entries, truncated })
+        } catch (error: unknown) {
+          if (signal.aborted) {
+            return err(request, { code: 'cancelled', message: 'workspace search was aborted', details: {} })
+          }
+          return err(request, fsFailed(error, request.payload.root))
+        }
+      },
+
+      async mkdir(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.mkdir needs ctx.fs', details: {} })
+        }
+        try {
+          const target = await fs.resolve(request.payload.path)
+          await fs.mkdir(target)
+          invalidateSearchIndexes()
+          return ok(request, { path: target.displayPath })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.path))
+        }
+      },
+
+      async rename(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.rename needs ctx.fs', details: {} })
+        }
+        try {
+          const source = await fs.resolve(request.payload.from)
+          const destination = await fs.resolve(request.payload.to)
+          await fs.rename(source, destination)
+          invalidateSearchIndexes()
+          return ok(request, { path: destination.displayPath })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.from))
+        }
+      },
+
+      async delete(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.delete needs ctx.fs', details: {} })
+        }
+        try {
+          const target = await fs.resolve(request.payload.path)
+          await fs.delete(target)
+          invalidateSearchIndexes()
+          return ok(request, { deleted: true as const })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.path))
+        }
+      },
+
+      async copy(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.copy needs ctx.fs', details: {} })
+        }
+        try {
+          const source = await fs.resolve(request.payload.from)
+          const destination = await fs.resolve(request.payload.to)
+          await fs.copy(source, destination)
+          invalidateSearchIndexes()
+          return ok(request, { path: destination.displayPath })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.from))
+        }
+      },
+
+      async writeText(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.writeText needs ctx.fs', details: {} })
+        }
+        try {
+          const target = await fs.resolve(request.payload.path)
+          await fs.writeText(target, request.payload.content ?? '')
+          invalidateSearchIndexes()
+          return ok(request, { path: target.displayPath })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.path))
+        }
+      },
+
+      async readText(request) {
+        const fs = ctx.get('fs')
+        if (fs === undefined) {
+          return err(request, { code: 'internal', message: 'host.readText needs ctx.fs', details: {} })
+        }
+        try {
+          const target = await fs.resolve(request.payload.path)
+          const content = await fs.readText(target)
+          return ok(request, { path: target.displayPath, content })
+        } catch (error: unknown) {
+          return err(request, fsFailed(error, request.payload.path))
+        }
+      },
+
       async openPath(request, signal) {
         return openPath(request, request.payload.path, signal)
+      },
+      async revealPath(request, signal) {
+        return revealPath(request, request.payload.path, signal)
+      },
+      restartWeb(request) {
+        const hosted = ctx.get('webServer') as { readonly port?: number } | undefined
+        const port = resolveRestartListenPort(request.payload.port, {
+          ...(defaults.restartListenPort === undefined ? {} : { configured: defaults.restartListenPort }),
+          ...(hosted?.port === undefined ? {} : { hosted: hosted.port }),
+        })
+        const scriptPath = (defaults.resolveRestartWebScript ?? resolveRestartWebScript)(defaults.cwd)
+        if (scriptPath === undefined) {
+          return Promise.resolve(err(request, {
+            code: 'internal',
+            message: `host.restartWeb cannot find scripts/restart-dsh-web.mjs under ${defaults.cwd}`,
+            details: {},
+          }))
+        }
+        const spawn = defaults.spawnRestartWeb ?? spawnRestartWeb
+        const schedule = defaults.scheduleRestartWeb ?? scheduleRestartWeb
+        schedule(() => {
+          try {
+            spawn({ scriptPath, port, cwd: defaults.cwd })
+          } catch (error: unknown) {
+            ctx.logger.warn(
+              `host.restartWeb: spawn failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+          }
+        })
+        return Promise.resolve(ok(request, { accepted: true as const, port }))
       },
     },
 
@@ -3201,10 +3536,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       describe(request) {
         const settings = ctx.get('settings')
         if (settings === undefined) return Promise.resolve(err(request, settingsAbsent()))
+        const exposed = exposedNamespaces()
         return Promise.resolve(ok(request, {
           writable: settings.writable,
           hasDocument: settings.documentPath !== undefined,
-          namespaces: settings.describe({ redactSecrets: true }).map(namespaceView),
+          namespaces: settings.describe({ redactSecrets: true })
+            .filter(descriptor => exposed.has(String(descriptor.ns)))
+            .map(namespaceView),
         }))
       },
       async openDocument(request, signal) {

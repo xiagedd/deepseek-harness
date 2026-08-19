@@ -114,6 +114,11 @@ export interface ComposerKeyboard {
   redo(): void
   /** Paste over the selection (sync components ride the same transaction). */
   pasteBegin(text: string, selection: EditSelection, components?: readonly PasteComponent[], generation?: number): void
+  /**
+   * Place one U+FFFC reference chip over the span (same insert-ref path as
+   * an `@` pick). Collapsed span = insert at caret. False when phase/CAS refuse.
+   */
+  insertReference(ref: ReferenceInsert, span: TokenSpan): boolean
   /** Caret/selection gestures the machine cannot observe end the paste attempt. */
   invalidatePaste(): void
   /** Feed a draft/caret change through trigger detection (guard derived from phase). */

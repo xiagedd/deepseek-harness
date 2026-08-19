@@ -22,7 +22,10 @@ import type {
 } from '@deepseek-ai/dsh-fs'
 import {
   applyLiteralEdit,
+  copyEntry,
+  deleteEntry,
   listDirectory,
+  makeDirectory,
   normalizeLineEndings,
   probe,
   probeNoFollow,
@@ -30,6 +33,7 @@ import {
   readTextForDiff,
   readWholeBytes,
   readWholeText,
+  renameEntry,
   resolveLocalTarget,
   restoreLineEndings,
   streamWholeText,
@@ -254,11 +258,50 @@ export class LocalFileSystem extends FileSystem {
     })
   }
 
+  override async mkdir(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(target.targetKey, () => {
+      return makeDirectory({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+    })
+  }
+
+  override async rename(source: FsTarget, destination: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withOrderedLocks(source.targetKey, destination.targetKey, () => {
+      return renameEntry(
+        { displayPath: source.displayPath, targetKey: source.targetKey },
+        { displayPath: destination.displayPath, targetKey: destination.targetKey },
+        signal,
+      )
+    })
+  }
+
+  override async delete(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(target.targetKey, () => {
+      return deleteEntry({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+    })
+  }
+
+  override async copy(source: FsTarget, destination: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withOrderedLocks(source.targetKey, destination.targetKey, () => {
+      return copyEntry(
+        { displayPath: source.displayPath, targetKey: source.targetKey },
+        { displayPath: destination.displayPath, targetKey: destination.targetKey },
+        signal,
+      )
+    })
+  }
+
   /* v8 ignore next 5 -- the post-write probe finding the file absent requires a
    * concurrent unlink between rename and stat; fall back to a sentinel version. */
   private versionAfterWrite(after: { version: FsVersion } | null, target: FsTarget): FsVersion {
     if (after) return after.version
     return FsVersion(`missing:${target.targetKey}`)
+  }
+
+  /** Run `op` with exclusive access to two keys in a deadlock-free order. */
+  private withOrderedLocks<T>(left: string, right: string, op: () => Promise<T>): Promise<T> {
+    if (left === right) return this.withLock(left, op)
+    const [first, second] = left < right ? [left, right] : [right, left]
+    return this.withLock(first, () => this.withLock(second, op))
   }
 }
 

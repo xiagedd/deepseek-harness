@@ -6,11 +6,11 @@
  * region-slot content) ride the owner props. Session facts
  * (running/removed/promptError) are self-selected via useSession. */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
+  IconCloseFill14, IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { AttachmentRail, DropOverlay, ImageLightbox } from '@deepseek-ai/dsh-client-ui-attachment'
 import type { AttachmentRailItem } from '@deepseek-ai/dsh-client-ui-attachment'
@@ -24,14 +24,14 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
-import { deriveDecorations } from '../input/decorations.ts'
+import { chipCellStep, chipDisplayLabel, deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import {
   attachmentErrorText, attachmentRailLabels, dropOverlayLabels, imageSizeText, lightboxLabels,
 } from '../image-labels.ts'
+import { acceptWorkspaceDrops, classifyDrop, workspaceFileInsert } from './drop-paths.ts'
 import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
-import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
 import css from './InputBar.module.css'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
@@ -45,14 +45,15 @@ interface ComposerRailItem extends AttachmentRailItem {
 export type InputBarProps = ComposerBarProps
 
 export function InputBar({
-  useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
-  resolveSubmitMode, toggleCommandMenu, stop, command, t,
+  useSession, useSessions, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
+  resolveSubmitMode, toggleCommandMenu, stop, command, revealReference, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
   placeholder, accessory, overlay, leftItems, rightItems, footer,
 }: InputBarProps) {
   const input = useInput(s => s)
+  const sessionCwd = useSessions(list => (sessionId === undefined ? undefined : list.byId[sessionId]?.cwd))
   const notice = useNotices(s => s)
   const lexicon = useLexicon(s => s)
   const commandMenuOpen = useMenuLauncher(source => source === 'command')
@@ -107,8 +108,6 @@ export function InputBar({
   const dragDepthRef = useRef(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const mirrorRef = useRef<HTMLDivElement | null>(null)
-  const safari = useMemo(() => isSafariBrowser(navigator), [])
-  const safariNativeShrinkRef = useRef(false)
   // IME guard: composition Enter picks a candidate, it must not send. The ref outlives renders;
   // clearing is deferred one tick because Safari delivers the closing keydown AFTER compositionend.
   const composingRef = useRef(false)
@@ -156,18 +155,6 @@ export function InputBar({
       inputActions.pruneImages(attachments.map(attachment => attachment.id))
     }
   }, [attachments, input?.imageIds, inputActions])
-
-  // A native Safari edit that shortens the draft may leave the previous
-  // soft-wrap layout behind after the mirror shrinks. The native-change signal
-  // keeps ordinary typing and programmatic draft updates from reading layout;
-  // the helper then repairs only measured overflow before paint while
-  // preserving native editing state. See
-  // .agents/notes/implemented/bug-fix/2026-08-13-safari-textarea-soft-wrap-reflow.md.
-  useLayoutEffect(() => {
-    const nativeShrink = safariNativeShrinkRef.current
-    safariNativeShrinkRef.current = false
-    if (safari && nativeShrink) repairSafariTextareaLayout(inputRef.current)
-  }, [draft, safari])
 
   useEffect(() => {
     if (preview !== null && !attachments.some(attachment => attachment.id === preview.id)) setPreview(null)
@@ -358,7 +345,6 @@ export function InputBar({
     if (keyboard === undefined || locked) return // disabled/read-only states cannot edit the draft
     if (machineBusy) return // submitting is the read-only span; adjudicating holds the pending lock
     const next = e.target.value
-    safariNativeShrinkRef.current = safari && next.length < draft.length
     keyboard.setDraft(next)
     // selectionStart is number|null in lib.dom; the type-aware lint program narrows it.
     // oxlint-disable-next-line typescript/no-unnecessary-condition
@@ -370,9 +356,10 @@ export function InputBar({
   // BETWEEN them — what needs normalizing is deletion (whole chip per
   // Backspace/Delete via native single-char semantics, which U+FFFC already
   // gives us) and selection endpoints: Shift-extension snapping is native
-  // too (one char = one step). Mouse selection of a chip is handled in the
-  // backdrop click handler below. Undo/redo must NOT reach the browser: the
-  // machine owns the transaction log.
+  // too (one char = one step). The chip × is painted in the pointer-inert
+  // backdrop under the textarea; pointerdown peeks through by hit-rect so a
+  // click on × deletes that one occurrence (same draft splice as Backspace).
+  // Undo/redo must NOT reach the browser: the machine owns the transaction log.
   // selectionStart/End are number|null in lib.dom; the type-aware lint program narrows them.
   /* oxlint-disable typescript/no-unnecessary-condition */
   const selectionOf = (el: HTMLTextAreaElement) => ({
@@ -464,14 +451,61 @@ export function InputBar({
     if (rejected !== null) showToast(rejected)
   }, [addImages, attachments, imageLimits, showToast, t])
 
+  // Non-image Files with a native path become the same workspace-file chip as
+  // an `@` pick (relative label, absolute ref). No file body, no directory
+  // walk. Path-less rejects toast; missing cwd / outside-workspace toast and
+  // skip that group — the composer must stay mounted.
+  const insertPathChips = useCallback((rows: readonly { file: File; path: string }[]): void => {
+    /* v8 ignore next -- drop is gated on canAcceptDrop (false when locked, busy, or the machine face is absent). */
+    if (keyboard === undefined || locked || machineBusy || rows.length === 0) return
+    const cwd = sessionCwd === undefined || sessionCwd === '' ? undefined : sessionCwd
+    const { chips, outside } = acceptWorkspaceDrops(cwd, rows)
+    if (outside) showToast(t('drop.outsideWorkspace'))
+    if (chips.length === 0) return
+    try {
+      const el = inputRef.current
+      /* v8 ignore next -- textarea is resident for the bar's lifetime */
+      if (el === null) return
+      /* oxlint-disable typescript/no-unnecessary-condition -- selectionStart/End are number|null in lib.dom */
+      let start = el.selectionStart ?? 0
+      let end = el.selectionEnd ?? start
+      /* oxlint-enable typescript/no-unnecessary-condition */
+      for (const chip of chips) {
+        const ok = keyboard.insertReference(
+          workspaceFileInsert(chip.path, chip.label),
+          { start, end, draftRev: keyboard.snapshot.draftRev },
+        )
+        if (!ok) {
+          showToast(t('drop.pathUnavailable'))
+          return
+        }
+        start += 1
+        if (keyboard.snapshot.draft[start] === ' ') start += 1
+        end = start
+      }
+      restoreCaret(el, start)
+    } catch {
+      showToast(t('drop.pathUnavailable'))
+    }
+  }, [keyboard, locked, machineBusy, sessionCwd, showToast, t])
+
+  const intakeDrop = useCallback((files: readonly File[]): void => {
+    if (files.length === 0) return
+    const next = classifyDrop(files)
+    if (next.images.length > 0) intakeImages(next.images)
+    if (next.paths.length > 0) insertPathChips(next.paths)
+    if (next.missingPath.length > 0) showToast(t('drop.pathUnavailable'))
+  }, [intakeImages, insertPathChips, showToast, t])
+
   // Whole-page file-drop intake (DeepSeek Chat behavior): the listeners live
   // on the document so a drop anywhere over the window adds images, not only
   // over the composer card. Safe as document-level state: the composer-bar
   // slot is `kind: 'single'`, so at most one bar is mounted to bind these.
   // Text drags carry no 'Files' type and pass through untouched, keeping the
-  // native drop-text-into-textarea path. The overlay layer itself is
-  // pointer-inert, so it never disturbs the enter/leave count.
-  const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+  // native drop-text-into-textarea path. Files drops split: image/* → rail,
+  // other files/folders with a native path → path chips. The overlay layer
+  // itself is pointer-inert, so it never disturbs the enter/leave count.
+  const canAcceptDrop = !locked && !machineBusy && [addImages, keyboard].some(face => face !== undefined)
   useEffect(() => {
     const hasFiles = (event: globalThis.DragEvent): boolean =>
       event.dataTransfer?.types.includes('Files') ?? false
@@ -505,7 +539,7 @@ export function InputBar({
       event.preventDefault()
       reset()
       if (!canAcceptDrop) return
-      intakeImages([...(event.dataTransfer?.files ?? [])])
+      intakeDrop([...(event.dataTransfer?.files ?? [])])
     }
     document.addEventListener('dragenter', onDragEnter)
     document.addEventListener('dragover', onDragOver)
@@ -519,7 +553,7 @@ export function InputBar({
       document.removeEventListener('drop', onDrop)
       window.removeEventListener('dragend', reset)
     }
-  }, [canAcceptDrop, intakeImages])
+  }, [canAcceptDrop, intakeDrop])
 
   const closePreview = useCallback(() => { setPreview(null) }, [])
 
@@ -547,6 +581,38 @@ export function InputBar({
   const keepFocus = (e: MouseEvent<HTMLButtonElement>): void => {
     e.preventDefault()
     inputRef.current?.focus({ preventScroll: true })
+  }
+
+  // One-placeholder splice through the same draft write as Backspace. Identity
+  // is occurrenceId, so a same-named subagent chip is not the file chip.
+  const removeChip = (occurrenceId: number): void => {
+    if (keyboard === undefined || locked || machineBusy) return
+    const occ = input.occurrences.find(row => row.occurrenceId === occurrenceId)
+    if (occ === undefined) return
+    keyboard.setDraft(draft.slice(0, occ.offset) + draft.slice(occ.offset + 1), {
+      start: occ.offset, end: occ.offset + 1, insertedLength: 0,
+    })
+    const el = inputRef.current
+    if (el !== null) restoreCaret(el, occ.offset)
+  }
+
+  // The textarea stacks above the backdrop, so the × never receives the
+  // pointer. Hit the control's layout rect and splice if the press lands in it.
+  const onChipRemovePeek = (e: React.PointerEvent<HTMLTextAreaElement>): void => {
+    if (locked || machineBusy || workspaceTrigger) return
+    const hits = e.currentTarget.parentElement?.querySelectorAll('[data-chip-remove]')
+    if (hits === undefined) return
+    for (let i = 0; i < hits.length; i += 1) {
+      const btn = hits[i]
+      if (!(btn instanceof HTMLElement)) continue
+      const box = btn.getBoundingClientRect()
+      if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) continue
+      const occurrenceId = Number(btn.dataset.chipRemove)
+      if (!Number.isFinite(occurrenceId)) return
+      e.preventDefault()
+      removeChip(occurrenceId)
+      return
+    }
   }
 
   const onToggleCommandMenu = (): void => {
@@ -613,10 +679,22 @@ export function InputBar({
       pushPlain(b.at)
       if (b.kind === 'chip') {
         const chip = b.chip
+        // The basename identifies the file and the cell step below makes room
+        // for it; the full label rides the title tooltip either way.
+        const display = chipDisplayLabel(chip.label)
+        // A file chip reveals its file where the host can browse it; every
+        // other source (and a host without the optional face) stays inert.
+        const revealRef = chip.revealRef
+        const reveal = revealRef !== null && revealReference !== undefined
+          ? (ev: MouseEvent<HTMLSpanElement>): void => {
+            ev.preventDefault()
+            revealReference(revealRef)
+          }
+          : undefined
         backdrop.push(
           // The cell's ::before renders U+FFFC itself so its advance equals the
-          // textarea's placeholder exactly (same char, same font); the label is
-          // a clipped overlay that never affects layout.
+          // textarea's placeholder exactly (same char, same font); the pill is
+          // an overlay inside that cell and never affects layout.
           <span
             key={`chip-${chip.occurrenceId}`}
             className={clsx(css.chip, chip.invalid && css.chipInvalid)}
@@ -625,7 +703,32 @@ export function InputBar({
             data-invalid={chip.invalid || undefined}
             title={chip.label}
           >
-            <span className={css.chipLabel}>{chip.label}</span>
+            <span
+              className={clsx(css.chipPill, reveal !== undefined && css.chipReveal)}
+              data-chip-reveal={revealRef ?? undefined}
+              onClick={reveal}
+            >
+              <span className={css.chipLabel}>{display}</span>
+              {!locked && !machineBusy && (
+                <button
+                  type="button"
+                  className={css.chipRemove}
+                  data-chip-remove={chip.occurrenceId}
+                  aria-label={t('chip.remove', { name: display })}
+                  tabIndex={-1}
+                  onMouseDown={keepFocus}
+                  onClick={(ev) => {
+                    ev.preventDefault()
+                    // The × is the delete gesture only: without this the click
+                    // would bubble to the pill and also reveal the file.
+                    ev.stopPropagation()
+                    removeChip(chip.occurrenceId)
+                  }}
+                >
+                  <IconCloseFill14 size={14} />
+                </button>
+              )}
+            </span>
           </span>,
         )
         cursor = chip.offset + 1 // the placeholder char the chip stands for
@@ -710,7 +813,18 @@ export function InputBar({
             offset the browser applies to both layers at once, never a JS mirror between two boxes,
             which a compositor-driven gesture outruns and leaves the words trailing the caret. */}
         <div ref={scrollRef} className={css.scroll} data-input-scroll>
-          <div className={css.grow}>
+          {/* The cell step publishes ONE placeholder advance to all three text
+              layers (the sheet swaps the cell font family): a textarea cannot
+              give two placeholders two widths, so the widest chip label decides
+              how much room every chip in this draft gets. */}
+          {/* data-has-chip raises the shared text line-height to the chip line
+              so a pill fits inside its own line box; a chip-free draft keeps
+              the card's own text metric. */}
+          <div
+            className={css.grow}
+            data-chip-cell={chipCellStep(deco.chips)}
+            data-has-chip={deco.chips.length > 0 || undefined}
+          >
             <div aria-hidden className={css.backdrop} data-input-backdrop>{backdrop}</div>
             <textarea
               ref={inputRef}
@@ -734,6 +848,7 @@ export function InputBar({
                     : planActive ? t('placeholder.plan') : t('placeholder.default'))}
               rows={2}
               onChange={onChange}
+              onPointerDown={onChipRemovePeek}
               onKeyDown={onKeyDown}
               onSelect={onSelect}
               onCopy={(e) => { onCopyOrCut(e, false) }}

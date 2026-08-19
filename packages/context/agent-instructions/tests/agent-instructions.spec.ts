@@ -146,6 +146,11 @@ class RecordingFileSystem extends FileSystem {
   override async editText(_target: FsTarget, _edit: FsEditRequest): Promise<FsEditOutcome> {
     return { version: FsVersion('unused'), before: '', after: '' }
   }
+
+  override async mkdir(): Promise<void> {}
+  override async rename(): Promise<void> {}
+  override async delete(): Promise<void> {}
+  override async copy(): Promise<void> {}
 }
 
 class BlockingReadFileSystem extends RecordingFileSystem {
@@ -259,7 +264,7 @@ async function appendAdditionalContexts(ctx: Context, agent: Agent): Promise<num
 const composedPrefixes = new WeakMap<object, Message[]>()
 
 async function composeBaselinePrefix(ctx: Context, agent: Agent): Promise<Message[]> {
-  const signal = new AbortController().signal
+  const signal = AbortSignal.timeout(1000)
   await agentEvents(ctx, agent).waterfall(
     'agent/pre-step',
     { messages: [], turn: 1, step: 1, signal },

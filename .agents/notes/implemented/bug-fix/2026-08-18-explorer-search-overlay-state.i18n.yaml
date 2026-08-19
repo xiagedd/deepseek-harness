@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-18-explorer-search-overlay-state.md
+2026-08-18-explorer-search-overlay-state.md: 0848502b0bab736ac42143b13c00a67c164ba56d
+2026-08-18-explorer-search-overlay-state.zh.md: 74e1a7d198944fa7144fa3063a6ac83c9e932f8f

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-api-remotes",
   "description": "Remote BFF assembly and Host Agent/Session lookup policy",
-  "version": "0.1.0-rc.7",
+  "version": "0.1.0-rc.5",
   "publishConfig": {
     "access": "public"
   },
@@ -66,6 +66,9 @@
     "@deepseek-ai/dsh-goal": "workspace:^",
     "@deepseek-ai/dsh-cordis-host-runner": "workspace:^",
     "@deepseek-ai/dsh-host-plugin-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-mcp-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-skill-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-rules-inventory": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-agent-presets": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
@@ -83,6 +86,9 @@
     "@deepseek-ai/dsh-goal": "workspace:^",
     "@deepseek-ai/dsh-cordis-host-runner": "workspace:^",
     "@deepseek-ai/dsh-host-plugin-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-mcp-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-skill-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-rules-inventory": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-agent-presets": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",

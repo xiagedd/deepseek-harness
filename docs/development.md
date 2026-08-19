@@ -124,6 +124,18 @@ The keyless [CI workflow](../.github/workflows/ci.yml) groups independent gates 
 
 The root [contributor instructions](../AGENTS.md#commands) summarize common commands, while [`package.json`](../package.json) and [scripts/run-gates.ts](../scripts/run-gates.ts) own the current script and gate inventories. Select the smallest checks that cover the changed surface. Documentation changes use `pnpm run doc-sync`; package-public behavior changes also update the owning README or JSDoc, and built-artifact checks require `pnpm run build` first.
 
+### Restarting `dsh web` vs refreshing the browser
+
+A browser hard refresh reloads the page; it does **not** replace the Node host that serves it. Use a host restart when the change lives in Host/CLI/profile wiring that the running process already loaded, and a hard refresh (after rebuilding client bundles when needed) when only the browser-facing client composition changed.
+
+| Change | What to do |
+|---|---|
+| Host package, CLI `bin.ts` path, `cordis.yml` / profile patch, new plugin package row, or anything else the Node process reads once at boot | `pnpm run web:restart` (default port 3080). Confirm the printed `CreationDate` is after your edit. |
+| Client component / CSS under `packages/client/*` after `lib/client.js` was rebuilt (`pnpm run build:lib:client`, `pnpm run dev:web`, or an equivalent bundle step) | Hard refresh the browser tab. Host restart is unnecessary if the same process already serves the new bundle. |
+| Both host boot wiring and client UI | Restart the host, then hard refresh once the self-proof URL answers. |
+
+`pnpm run web:restart` kills only listeners whose CommandLine matches this repo's `dsh web` / `bin.ts web` / `--port <n>` launch, waits until the port is free, starts `node --import tsx/esm apps/cli/src/bin.ts web --port <n>`, and exits non-zero unless listen plus HTTP 200 succeed. Default mode detaches and writes `.dsh-web-<port>.log` / `.dsh-web-<port>.err.log` at the repo root; pass `-- --foreground` to keep the server in the terminal. After a Host that already loaded `host.restartWeb` is running, **Settings → General → Restart Web** runs the same script without a terminal. See the [restart self-proof Agent Note](../.agents/notes/implemented/process/2026-08-18-dsh-web-restart-self-proof.md) and the [Settings restart control](../.agents/notes/implemented/feature/2026-08-18-settings-web-restart.md).
+
 ### Demos
 
 Run the repository build separately before using these source-checkout demos:

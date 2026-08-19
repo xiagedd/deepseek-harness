@@ -51,9 +51,11 @@ describe('apply', () => {
     await ctx.plugin({ inject: [...inject], apply }).await()
     const t = locale.bind('slash.menu')
     expect(t('command')).toBe('命令')
+    expect(t('workspace-file')).toBe('文件与文件夹')
     locale.setLocale('en')
     expect(t('skill')).toBe('Skills')
     expect(t('subagent')).toBe('Subagents')
+    expect(t('workspace-file')).toBe('Files & Folders')
     expect(t('loading')).toBe('Loading…')
   })
 

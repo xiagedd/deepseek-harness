@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-18-composer-chip-cell-metrics.md
+2026-08-18-composer-chip-cell-metrics.md: fdd581b11a3ee4f260ed7c83d8966e96a65db5ac
+2026-08-18-composer-chip-cell-metrics.zh.md: 57d1c517d8b305ea519f10bb0532b822588e65cb

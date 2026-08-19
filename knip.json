@@ -782,6 +782,11 @@
       "ignoreDependencies": [
         "@deepseek-ai/.+"
       ]
+    },
+    "packages/bundle/web-local-tools": {
+      "ignoreDependencies": [
+        "@deepseek-ai/.+"
+      ]
     }
   }
 }

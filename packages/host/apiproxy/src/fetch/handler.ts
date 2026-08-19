@@ -31,8 +31,10 @@ import {
 } from '../api/sessions.schema.ts'
 import {
   hostCreateDirectoryRequestSchema, hostDescribeRequestSchema,
-  hostListDirectoryRequestSchema, hostOpenPathRequestSchema,
-  hostPickDirectoryRequestSchema,
+  hostListDirectoryRequestSchema, hostListEntriesRequestSchema, hostSearchEntriesRequestSchema, hostMkdirRequestSchema,
+  hostOpenPathRequestSchema, hostPickDirectoryRequestSchema, hostRenameRequestSchema,
+  hostDeleteRequestSchema, hostCopyRequestSchema, hostWriteTextRequestSchema, hostReadTextRequestSchema,
+  hostRevealPathRequestSchema, hostRestartWebRequestSchema,
 } from '../api/host.schema.ts'
 import {
   workspaceArchiveSessionRequestSchema,
@@ -108,7 +110,17 @@ const UNARY_ROUTES: UnaryRoutes = {
   'host.pickDirectory': { schema: hostPickDirectoryRequestSchema, invoke: (api, r, signal) => api.host.pickDirectory(r, signal) },
   'host.listDirectory': { schema: hostListDirectoryRequestSchema, invoke: (api, r, signal) => api.host.listDirectory(r, signal) },
   'host.createDirectory': { schema: hostCreateDirectoryRequestSchema, invoke: (api, r) => api.host.createDirectory(r) },
+  'host.listEntries': { schema: hostListEntriesRequestSchema, invoke: (api, r, signal) => api.host.listEntries(r, signal) },
+  'host.searchEntries': { schema: hostSearchEntriesRequestSchema, invoke: (api, r, signal) => api.host.searchEntries(r, signal) },
+  'host.mkdir': { schema: hostMkdirRequestSchema, invoke: (api, r) => api.host.mkdir(r) },
+  'host.rename': { schema: hostRenameRequestSchema, invoke: (api, r) => api.host.rename(r) },
+  'host.delete': { schema: hostDeleteRequestSchema, invoke: (api, r) => api.host.delete(r) },
+  'host.copy': { schema: hostCopyRequestSchema, invoke: (api, r) => api.host.copy(r) },
+  'host.writeText': { schema: hostWriteTextRequestSchema, invoke: (api, r) => api.host.writeText(r) },
+  'host.readText': { schema: hostReadTextRequestSchema, invoke: (api, r) => api.host.readText(r) },
   'host.openPath': { schema: hostOpenPathRequestSchema, invoke: (api, r, signal) => api.host.openPath(r, signal) },
+  'host.revealPath': { schema: hostRevealPathRequestSchema, invoke: (api, r, signal) => api.host.revealPath(r, signal) },
+  'host.restartWeb': { schema: hostRestartWebRequestSchema, invoke: (api, r) => api.host.restartWeb(r) },
   'workspace.list': { schema: workspaceListRequestSchema, invoke: (api, r) => api.workspace.list(r) },
   'workspace.create': { schema: workspaceCreateRequestSchema, invoke: (api, r) => api.workspace.create(r) },
   'workspace.rename': { schema: workspaceRenameRequestSchema, invoke: (api, r) => api.workspace.rename(r) },

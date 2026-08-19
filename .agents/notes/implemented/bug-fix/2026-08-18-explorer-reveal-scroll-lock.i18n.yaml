@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-18-explorer-reveal-scroll-lock.md
+2026-08-18-explorer-reveal-scroll-lock.md: e7ddfa6f3648f8aecf023265d1b4308bc98f6f90
+2026-08-18-explorer-reveal-scroll-lock.zh.md: 69781a86ae68d6072bd2dc9222fb053fc05552a3

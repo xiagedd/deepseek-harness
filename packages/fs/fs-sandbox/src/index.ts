@@ -4,7 +4,7 @@
  * text-storage mechanics — resolve, stat, read/stream, list, the atomic
  * write and the read-match-write edit critical section — are the local
  * implementation's, verbatim; this package adds only the per-call POLICY fence
- * on the two mutations. Reads pass through untouched: every mode permits
+ * on mutations. Reads pass through untouched: every mode permits
  * reading.
  *
  * The fence is a policy check in TRUSTED code over a MODEL-CONTROLLED path,
@@ -88,7 +88,7 @@ export class SandboxedFileSystem extends LocalFileSystem {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsWriteOutcome> {
-    return super.writeText(await this.checkedTarget(target, sandboxPolicy), content, expected, signal)
+    return super.writeText(await this.checkedTarget(target, sandboxPolicy, 'write'), content, expected, signal)
   }
 
   /**
@@ -109,7 +109,79 @@ export class SandboxedFileSystem extends LocalFileSystem {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome> {
-    return super.editText(await this.checkedTarget(target, sandboxPolicy), edit, expected, signal)
+    return super.editText(await this.checkedTarget(target, sandboxPolicy, 'edit'), edit, expected, signal)
+  }
+
+  /**
+   * Fence the mkdir by the per-call policy, then delegate to the inherited create.
+   * @param target - the resolved directory to create.
+   * @param signal - aborts before the directory is created.
+   * @param sandboxPolicy - the per-call mode and workspace root; omit to use
+   *   the deployment fallback.
+   */
+  override async mkdir(
+    target: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    return super.mkdir(await this.checkedTarget(target, sandboxPolicy, 'mkdir'), signal)
+  }
+
+  /**
+   * Fence both paths by the per-call policy, then delegate to the inherited rename.
+   * @param source - the resolved target to move.
+   * @param destination - the resolved destination path.
+   * @param signal - aborts before the rename takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root; omit to use
+   *   the deployment fallback.
+   */
+  override async rename(
+    source: FsTarget,
+    destination: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    return super.rename(
+      await this.checkedTarget(source, sandboxPolicy, 'rename'),
+      await this.checkedTarget(destination, sandboxPolicy, 'rename'),
+      signal,
+    )
+  }
+
+  /**
+   * Fence the delete by the per-call policy, then delegate to the inherited delete.
+   * @param target - the resolved target to delete.
+   * @param signal - aborts before the deletion takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root; omit to use
+   *   the deployment fallback.
+   */
+  override async delete(
+    target: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    return super.delete(await this.checkedTarget(target, sandboxPolicy, 'delete'), signal)
+  }
+
+  /**
+   * Fence both paths by the per-call policy, then delegate to the inherited copy.
+   * @param source - the resolved target to copy.
+   * @param destination - the resolved destination path.
+   * @param signal - aborts before the copy takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root; omit to use
+   *   the deployment fallback.
+   */
+  override async copy(
+    source: FsTarget,
+    destination: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    return super.copy(
+      await this.checkedTarget(source, sandboxPolicy, 'copy'),
+      await this.checkedTarget(destination, sandboxPolicy, 'copy'),
+      signal,
+    )
   }
 
   /**
@@ -123,12 +195,16 @@ export class SandboxedFileSystem extends LocalFileSystem {
    * refusal — the tool layer maps it to the model-facing `[sandbox: …]` marker
    * and the escalation hint.
    */
-  private async checkedTarget(target: FsTarget, sandboxPolicy?: SandboxExecutionPolicy): Promise<FsTarget> {
+  private async checkedTarget(
+    target: FsTarget,
+    sandboxPolicy: SandboxExecutionPolicy | undefined,
+    verb: string,
+  ): Promise<FsTarget> {
     const policy = sandboxPolicy ?? this.ctx.sandboxPolicy.resolve()
     const { mode } = policy
     if (mode === 'danger-full-access') return target
     if (mode === 'read-only') {
-      throw new FsError(`cannot write "${target.displayPath}": file access denied under read-only mode`, 'FS_SANDBOX_DENIED')
+      throw new FsError(`cannot ${verb} "${target.displayPath}": file access denied under read-only mode`, 'FS_SANDBOX_DENIED')
     }
     // workspace-write: containment on the FRESH canonical path (catches a
     // symlink ancestor swapped since the tool resolved this target), and the
@@ -142,7 +218,7 @@ export class SandboxedFileSystem extends LocalFileSystem {
       }
     }
     if (!contained) {
-      throw new FsError(`cannot write "${target.displayPath}": file access denied under workspace-write mode`, 'FS_SANDBOX_DENIED')
+      throw new FsError(`cannot ${verb} "${target.displayPath}": file access denied under workspace-write mode`, 'FS_SANDBOX_DENIED')
     }
     return fresh
   }

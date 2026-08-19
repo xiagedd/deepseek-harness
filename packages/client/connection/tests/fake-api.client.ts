@@ -83,6 +83,10 @@ export class FakeApiClient implements IApiClient {
     () => Promise.resolve(ok({ path: null }))
   onOpenPath: (payload: unknown) => Promise<RpcResponse<{ opened: true }>> =
     () => Promise.resolve(ok({ opened: true as const }))
+  onRevealPath: (payload: unknown) => Promise<RpcResponse<{ revealed: true }>> =
+    () => Promise.resolve(ok({ revealed: true as const }))
+  onRestartWeb: (payload: unknown) => Promise<RpcResponse<{ accepted: true; port: number }>> =
+    payload => Promise.resolve(ok({ accepted: true as const, port: (payload as { port?: number }).port ?? 3080 }))
 
   onListDirectory: (payload: unknown) => Promise<RpcResponse<{
     path: string
@@ -95,6 +99,41 @@ export class FakeApiClient implements IApiClient {
 
   onCreateDirectory: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
     () => Promise.resolve(ok({ path: '/home/fake/new' }))
+
+  onListEntries: (payload: unknown) => Promise<RpcResponse<{
+    path: string
+    entries: { name: string; path: string; type: 'file' | 'directory' | 'other'; hidden: boolean; size?: number }[]
+  }>> =
+    () => Promise.resolve(ok({ path: '/home/fake', entries: [] }))
+
+  onSearchEntries: (payload: unknown) => Promise<RpcResponse<{
+    path: string
+    entries: { name: string; path: string; type: 'file' | 'directory' | 'other'; hidden: boolean; size?: number }[]
+    truncated: boolean
+  }>> =
+    payload => Promise.resolve(ok({
+      path: (payload as { root: string }).root,
+      entries: [],
+      truncated: false,
+    }))
+
+  onMkdir: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    () => Promise.resolve(ok({ path: '/home/fake/dir' }))
+
+  onHostRename: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    () => Promise.resolve(ok({ path: '/home/fake/renamed' }))
+
+  onHostDelete: (payload: unknown) => Promise<RpcResponse<{ deleted: true }>> =
+    () => Promise.resolve(ok({ deleted: true as const }))
+
+  onHostCopy: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    () => Promise.resolve(ok({ path: '/home/fake/copy' }))
+
+  onWriteText: (payload: unknown) => Promise<RpcResponse<{ path: string }>> =
+    payload => Promise.resolve(ok({ path: (payload as { path: string }).path }))
+
+  onReadText: (payload: unknown) => Promise<RpcResponse<{ path: string; content: string }>> =
+    payload => Promise.resolve(ok({ path: (payload as { path: string }).path, content: '' }))
 
   private readonly muxConns: StreamConn<MuxFrame>[] = []
   private readonly hostConns: StreamConn<HostFrame>[] = []
@@ -145,7 +184,17 @@ export class FakeApiClient implements IApiClient {
     pickDirectory: payload => this.record('host.pickDirectory', payload, this.onPickDirectory(payload)),
     listDirectory: payload => this.record('host.listDirectory', payload, this.onListDirectory(payload)),
     createDirectory: payload => this.record('host.createDirectory', payload, this.onCreateDirectory(payload)),
+    listEntries: payload => this.record('host.listEntries', payload, this.onListEntries(payload)),
+    searchEntries: payload => this.record('host.searchEntries', payload, this.onSearchEntries(payload)),
+    mkdir: payload => this.record('host.mkdir', payload, this.onMkdir(payload)),
+    rename: payload => this.record('host.rename', payload, this.onHostRename(payload)),
+    delete: payload => this.record('host.delete', payload, this.onHostDelete(payload)),
+    copy: payload => this.record('host.copy', payload, this.onHostCopy(payload)),
+    writeText: payload => this.record('host.writeText', payload, this.onWriteText(payload)),
+    readText: payload => this.record('host.readText', payload, this.onReadText(payload)),
     openPath: payload => this.record('host.openPath', payload, this.onOpenPath(payload)),
+    revealPath: payload => this.record('host.revealPath', payload, this.onRevealPath(payload)),
+    restartWeb: payload => this.record('host.restartWeb', payload, this.onRestartWeb(payload)),
   }
 
   readonly workspace: IApiClient['workspace'] = {

@@ -1,0 +1,58 @@
+{
+  "name": "@deepseek-ai/dsh-web-local-tools",
+  "description": "Optional web overlay bundle: Settings MCP/Skills/Rules/Ignore pages plus their Host inventory Remotes, for profiles whose in-box web-app does not already insert those rows",
+  "version": "0.1.0-rc.5",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/bundle/web-local-tools"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/invariant.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-client-ui-settings-ignore": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-settings-mcp": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-settings-rules": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-settings-skills": "workspace:^",
+    "@deepseek-ai/dsh-host-mcp-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-rules-inventory": "workspace:^",
+    "@deepseek-ai/dsh-host-skill-inventory": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-invariants": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^"
+  }
+}

@@ -16,7 +16,7 @@ vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
 import { release as osRelease } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
-import { canOpenNativePath, openNativePath, openNativeTextFile, type PathOpenerRunner } from '../src/native-path-opener.ts'
+import { canOpenNativePath, openNativePath, openNativeTextFile, revealNativePath, windowsSelectPath, type PathOpenerRunner } from '../src/native-path-opener.ts'
 
 const signal = () => new AbortController().signal
 
@@ -317,5 +317,117 @@ describe('canOpenNativePath', () => {
       || marked(env.DISPLAY) || marked(env.WAYLAND_DISPLAY)
 
     expect(canOpenNativePath({ platform: 'linux', osRelease: '6.8.0-generic' })).toBe(expected)
+  })
+})
+
+describe('native path reveal', () => {
+  it('reveals with macOS open -R', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await revealNativePath('/Users/test/file.txt', signal(), { platform: 'darwin', run })
+    expect(run).toHaveBeenCalledWith('open', ['-R', '/Users/test/file.txt'], expect.any(AbortSignal))
+  })
+
+  it('reveals with Windows explorer /select, and ignores a non-zero exit', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => {
+      throw Object.assign(new Error('Command failed: explorer.exe'), { code: 1 })
+    })
+    await expect(revealNativePath('C:\\work\\spaced file.txt', signal(), { platform: 'win32', run }))
+      .resolves.toBeUndefined()
+    expect(run).toHaveBeenCalledWith(
+      'explorer.exe',
+      ['/select,C:\\work\\spaced file.txt'],
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('rejects a missing explorer.exe', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => {
+      throw Object.assign(new Error('spawn explorer.exe ENOENT'), { code: 'ENOENT' })
+    })
+    await expect(revealNativePath('C:\\work\\a.txt', signal(), { platform: 'win32', run }))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('reveals a WSL path through explorer /select,', async () => {
+    const requestSignal = signal()
+    const run = vi.fn<PathOpenerRunner>(async command => command === 'wslpath'
+      ? { stdout: '\\\\wsl.localhost\\Ubuntu\\home\\test user\\a.txt\r\n', stderr: '' }
+      : { stdout: '', stderr: '' })
+    await revealNativePath('/home/test user/a.txt', requestSignal, {
+      platform: 'linux', osRelease: '5.15.0-microsoft-standard-WSL2', env: { WSL_DISTRO_NAME: 'Ubuntu' }, run,
+    })
+    expect(run.mock.calls).toEqual([
+      ['wslpath', ['-w', '/home/test user/a.txt'], requestSignal],
+      ['explorer.exe', ['/select,\\\\wsl.localhost\\Ubuntu\\home\\test user\\a.txt'], requestSignal],
+    ])
+  })
+
+  it('asks FileManager1 to ShowItems and falls back to xdg-open parent', async () => {
+    const path = await import('node:path')
+    const { pathToFileURL } = await import('node:url')
+    const target = '/tmp/docs/a file.txt'
+    const run = vi.fn<PathOpenerRunner>(async (command) => {
+      if (command === 'dbus-send') throw new Error('no FileManager1')
+      return { stdout: '', stderr: '' }
+    })
+    await revealNativePath(target, signal(), {
+      platform: 'linux', osRelease: '6.8.0-generic', env: { DISPLAY: ':0' }, run,
+    })
+    expect(run.mock.calls[0]?.[0]).toBe('dbus-send')
+    expect(run.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      'org.freedesktop.FileManager1.ShowItems',
+      `array:string:${pathToFileURL(target).href}`,
+      'string:',
+    ]))
+    expect(run.mock.calls[1]).toEqual(['xdg-open', [path.dirname(target)], expect.any(AbortSignal)])
+  })
+
+  it('rejects an unsupported platform', async () => {
+    await expect(revealNativePath('/x', signal(), { platform: 'freebsd' as NodeJS.Platform }))
+      .rejects.toThrow(/unsupported/)
+  })
+
+  it('normalizes a forward-slash Windows path to backslashes for /select,', async () => {
+    // The reported failure: a workspace cwd reaches the Host as a POSIX-style
+    // path, and explorer.exe then opens the default folder and selects nothing.
+    const launch = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await revealNativePath('H:/GP0902_Git/deepseek-harness/Foo.cs', signal(), { platform: 'win32', launch })
+    expect(launch).toHaveBeenCalledWith(
+      'explorer.exe',
+      ['/select,H:\\GP0902_Git\\deepseek-harness\\Foo.cs'],
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('reveals through the detached launch boundary, not the capture runner', async () => {
+    // Production must fire-and-forget explorer (detached + unref) so the window
+    // actually raises; the capture runner must never see the launch.
+    const launch = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await revealNativePath('C:\\work\\a.txt', signal(), { platform: 'win32', run, launch })
+    expect(launch).toHaveBeenCalledWith('explorer.exe', ['/select,C:\\work\\a.txt'], expect.any(AbortSignal))
+    expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('windowsSelectPath', () => {
+  it('converts POSIX separators and keeps a native Windows path intact', () => {
+    expect(windowsSelectPath('H:/a/b/Foo.cs')).toBe('H:\\a\\b\\Foo.cs')
+    expect(windowsSelectPath('C:\\work\\spaced file.txt')).toBe('C:\\work\\spaced file.txt')
+  })
+
+  it('keeps spaces and non-ASCII characters untouched', () => {
+    expect(windowsSelectPath('H:/工作 空间/目标 文件.txt')).toBe('H:\\工作 空间\\目标 文件.txt')
+  })
+
+  it('drops a trailing separator a directory path carries', () => {
+    expect(windowsSelectPath('H:/工作 空间/子 目录/')).toBe('H:\\工作 空间\\子 目录')
+    expect(windowsSelectPath('C:\\work\\dir\\')).toBe('C:\\work\\dir')
+  })
+
+  it('leaves a bare root as the folder to open, having no item to select', () => {
+    expect(windowsSelectPath('C:/')).toBe('C:\\')
+    expect(windowsSelectPath('C:\\')).toBe('C:\\')
+    expect(windowsSelectPath('/')).toBe('\\')
   })
 })

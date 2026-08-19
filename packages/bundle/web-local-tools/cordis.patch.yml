@@ -1,0 +1,31 @@
+# Optional Web overlay: Settings MCP / Skills / Rules / Ignore pages and the
+# Host inventory Remotes they call. Hang this layer on a web profile whose
+# dsh-web-app does not already insert these ids. The in-box web-app in this
+# repository already inserts the same rows; hanging both loads each plugin
+# twice and Settings slot registration fails loud.
+#
+# This overlay does not ship explorer CodeMirror preview, layout persistence,
+# composer chip jumps, or host.searchEntries / host.revealPath / host.restartWeb.
+# Those live in the core packages listed in this bundle's README prerequisites.
+
+- insert:
+    - id: mcp-inventory
+      name: '@deepseek-ai/dsh-host-mcp-inventory'
+
+    - id: skill-inventory
+      name: '@deepseek-ai/dsh-host-skill-inventory'
+
+    - id: rules-inventory
+      name: '@deepseek-ai/dsh-host-rules-inventory'
+
+    - id: ui-settings-mcp
+      name: '@deepseek-ai/dsh-client-ui-settings-mcp'
+
+    - id: ui-settings-skills
+      name: '@deepseek-ai/dsh-client-ui-settings-skills'
+
+    - id: ui-settings-rules
+      name: '@deepseek-ai/dsh-client-ui-settings-rules'
+
+    - id: ui-settings-ignore
+      name: '@deepseek-ai/dsh-client-ui-settings-ignore'

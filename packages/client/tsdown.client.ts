@@ -261,6 +261,11 @@ function clientConfig(id: string, entry: string): UserConfig {
     }],
     outputOptions: {
       entryFileNames: 'client.js',
+      // The loader answers the injected require from its module table, which is
+      // keyed by package name and cannot resolve a relative chunk path. A split
+      // chunk would therefore throw at the first dynamic import, so every
+      // import() inlines and the artifact stays exactly one file.
+      inlineDynamicImports: true,
       // The map is served from /plugins/<scoped-package>/client.js.map. The
       // browser resolves its local sources back into URLs that mirror the
       // /packages/<group>/<package>/src directories; sourcesContent keeps them usable

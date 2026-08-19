@@ -37,6 +37,15 @@
       "path": "../../host/plugin-inventory"
     },
     {
+      "path": "../../host/mcp-inventory"
+    },
+    {
+      "path": "../../host/skill-inventory"
+    },
+    {
+      "path": "../../host/rules-inventory"
+    },
+    {
       "path": "../../interaction/commands"
     },
     {

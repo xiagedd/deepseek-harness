@@ -80,6 +80,18 @@ class FakeFileSystem extends FileSystem {
     this.files.set(target.targetKey, after)
     return { version: FsVersion('v3'), before: content, after }
   }
+
+  override async mkdir(_target: FsTarget): Promise<void> {}
+  override async rename(_source: FsTarget, destination: FsTarget): Promise<void> {
+    this.files.set(destination.targetKey, this.files.get(_source.targetKey) ?? '')
+    this.files.delete(_source.targetKey)
+  }
+  override async delete(target: FsTarget): Promise<void> {
+    this.files.delete(target.targetKey)
+  }
+  override async copy(_source: FsTarget, destination: FsTarget): Promise<void> {
+    this.files.set(destination.targetKey, this.files.get(_source.targetKey) ?? '')
+  }
 }
 
 describe('FileSystem provider seam', () => {

@@ -124,6 +124,18 @@ keyless [CI 工作流](../.github/workflows/ci.yml) 将独立门禁分组到若�
 
 根目录的[贡献者说明](../AGENTS.md#commands)概述常用命令，[`package.json`](../package.json) 与 [scripts/run-gates.ts](../scripts/run-gates.ts) 则负责当前脚本和门禁清单。请选择覆盖变更表面的最小检查集。文档变更使用 `pnpm run doc-sync`；包公开行为变更还需更新所属 README 或 JSDoc，而基于构建产物的检查需要先运行 `pnpm run build`。
 
+### 重启 `dsh web` 与刷新浏览器
+
+浏览器硬刷新只会重载页面，**不会**替换正在提供服务的 Node 宿主进程。宿主在启动时读入的 Host／CLI／profile 接线变更需要重启宿主；仅浏览器侧 Client 组合变更（且 bundle 已重建）时硬刷新即可。
+
+| 变更 | 做法 |
+|---|---|
+| Host 包、CLI `bin.ts` 路径、`cordis.yml`／profile 补丁、新增插件包行，或其它 Node 进程仅在启动时读取的内容 | `pnpm run web:restart`（默认端口 3080）。确认打印的 `CreationDate` 晚于你的改动时间。 |
+| `packages/client/*` 下的 Client 组件／CSS，且 `lib/client.js` 已重建（`pnpm run build:lib:client`、`pnpm run dev:web` 或等价 bundle 步骤） | 硬刷新浏览器标签页。同一进程已在提供新 bundle 时不必重启宿主。 |
+| 同时改了宿主启动接线与 Client UI | 先重启宿主，等自证 URL 可用后再硬刷新一次。 |
+
+`pnpm run web:restart` 只会结束 CommandLine 匹配本仓库 `dsh web`／`bin.ts web`／`--port <n>` 启动方式的监听进程，确认端口空闲后启动 `node --import tsx/esm apps/cli/src/bin.ts web --port <n>`，并在监听与 HTTP 200 成功前以非零退出。默认后台运行并把日志写到仓库根的 `.dsh-web-<port>.log`／`.dsh-web-<port>.err.log`；需要前台占住终端时传 `-- --foreground`。已经加载 `host.restartWeb` 的 Host 运行时，也可在**设置 → 通用设置 → 重启 Web 服务**执行同一脚本，不必开终端。详见[重启自证 Agent Note](../.agents/notes/implemented/process/2026-08-18-dsh-web-restart-self-proof.md)与[设置页重启入口](../.agents/notes/implemented/feature/2026-08-18-settings-web-restart.md)。
+
 ### 演示
 
 从源码 checkout 运行这些演示前，请单独执行仓库构建：

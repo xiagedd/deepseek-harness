@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+import { chmod, cp, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
 import type { BigIntStats, Dirent, Stats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -779,3 +779,129 @@ export function applyLiteralEdit(
 }
 
 export { normalizeLineEndings, restoreLineEndings }
+
+// --- Structural mutations (mkdir / rename / delete / copy) ---
+
+function mutationIoError(verb: string, displayPath: string, error: unknown): FsError {
+  if (error instanceof FsError) return error
+  if (isAbortError(error)) return new FsError(`${verb} aborted`, 'FS_ABORTED', { cause: error })
+  if (isENOENT(error)) return new FsError(`cannot ${verb} "${displayPath}": not found`, 'FS_NOT_FOUND', { cause: error })
+  if (isENOTDIR(error)) return new FsError(`cannot ${verb} "${displayPath}": not a directory`, 'FS_NOT_DIRECTORY', { cause: error })
+  if (isEEXIST(error)) return new FsError(`cannot ${verb} "${displayPath}": already exists`, 'FS_ALREADY_EXISTS', { cause: error })
+  if (isPermissionError(error)) return new FsError(`cannot ${verb} "${displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: error })
+  return new FsError(`cannot ${verb} "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+}
+
+/**
+ * Create one directory. The parent must already exist; an existing target
+ * fails with `FS_ALREADY_EXISTS` rather than succeeding as a no-op.
+ * @param target - the resolved directory to create.
+ * @param signal - aborts before the directory is created (`FS_ABORTED`).
+ */
+export async function makeDirectory(target: LocalTarget, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'mkdir')
+  let existing: PathInfo | null
+  try {
+    existing = await probe(target.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('mkdir', target.displayPath, error)
+  }
+  if (existing) throw new FsError(`cannot mkdir "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+  throwIfAborted(signal, 'mkdir')
+  try {
+    await mkdir(target.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('mkdir', target.displayPath, error)
+  }
+}
+
+/**
+ * Rename/move a file or directory. An existing destination fails with
+ * `FS_ALREADY_EXISTS`; a missing source fails with `FS_NOT_FOUND`.
+ * @param source - the resolved target to move.
+ * @param destination - the resolved destination path (must be absent).
+ * @param signal - aborts before the rename takes effect (`FS_ABORTED`).
+ */
+export async function renameEntry(source: LocalTarget, destination: LocalTarget, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'rename')
+  if (source.targetKey === destination.targetKey) {
+    throw new FsError(`cannot rename "${source.displayPath}": source and destination are the same`, 'FS_IO_ERROR')
+  }
+  let existing: PathInfo | null
+  try {
+    existing = await probe(source.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('rename', source.displayPath, error)
+  }
+  if (!existing) throw new FsError(`cannot rename "${source.displayPath}": not found`, 'FS_NOT_FOUND')
+  let dest: PathInfo | null
+  try {
+    dest = await probe(destination.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('rename', destination.displayPath, error)
+  }
+  if (dest) throw new FsError(`cannot rename "${destination.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+  throwIfAborted(signal, 'rename')
+  try {
+    await rename(source.targetKey, destination.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('rename', source.displayPath, error)
+  }
+}
+
+/**
+ * Delete a file or directory. Directories are removed recursively. A missing
+ * target fails with `FS_NOT_FOUND` rather than succeeding as a no-op.
+ * @param target - the resolved target to delete.
+ * @param signal - aborts before the deletion takes effect (`FS_ABORTED`).
+ */
+export async function deleteEntry(target: LocalTarget, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'delete')
+  let existing: PathInfo | null
+  try {
+    existing = await probe(target.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('delete', target.displayPath, error)
+  }
+  if (!existing) throw new FsError(`cannot delete "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+  throwIfAborted(signal, 'delete')
+  try {
+    await rm(target.targetKey, { recursive: true, force: false })
+  } catch (error: unknown) {
+    throw mutationIoError('delete', target.displayPath, error)
+  }
+}
+
+/**
+ * Copy a file or directory. Directories are copied recursively. An existing
+ * destination fails with `FS_ALREADY_EXISTS`.
+ * @param source - the resolved target to copy.
+ * @param destination - the resolved destination path (must be absent).
+ * @param signal - aborts before the copy takes effect (`FS_ABORTED`).
+ */
+export async function copyEntry(source: LocalTarget, destination: LocalTarget, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal, 'copy')
+  if (source.targetKey === destination.targetKey) {
+    throw new FsError(`cannot copy "${source.displayPath}": source and destination are the same`, 'FS_IO_ERROR')
+  }
+  let existing: PathInfo | null
+  try {
+    existing = await probe(source.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('copy', source.displayPath, error)
+  }
+  if (!existing) throw new FsError(`cannot copy "${source.displayPath}": not found`, 'FS_NOT_FOUND')
+  let dest: PathInfo | null
+  try {
+    dest = await probe(destination.targetKey)
+  } catch (error: unknown) {
+    throw mutationIoError('copy', destination.displayPath, error)
+  }
+  if (dest) throw new FsError(`cannot copy "${destination.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+  throwIfAborted(signal, 'copy')
+  try {
+    await cp(source.targetKey, destination.targetKey, { recursive: true, errorOnExist: true, force: false })
+  } catch (error: unknown) {
+    throw mutationIoError('copy', source.displayPath, error)
+  }
+}

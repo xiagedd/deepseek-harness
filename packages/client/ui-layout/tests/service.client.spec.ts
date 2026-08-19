@@ -12,15 +12,18 @@ function fakePanels(): PanelActions {
   return {
     setSidebar: vi.fn(),
     setDetails: vi.fn(),
+    setPreview: vi.fn(),
     toggleSidebar: vi.fn(),
     setNarrow: vi.fn(),
     openDetails: vi.fn(),
     closeDetails: vi.fn(),
+    openPreview: vi.fn(),
+    closePreview: vi.fn(),
   }
 }
 
 describe('LayoutController', () => {
-  it('forwards the three panel actions to the attached set', () => {
+  it('forwards the panel transitions to the attached set', () => {
     const service = new LayoutController()
     const panels = fakePanels()
     service.attachPanels(panels)
@@ -28,10 +31,14 @@ describe('LayoutController', () => {
     service.toggleSidebar()
     service.openDetails()
     service.closeDetails()
+    service.openPreview()
+    service.closePreview()
 
     expect(panels.toggleSidebar).toHaveBeenCalledTimes(1)
     expect(panels.openDetails).toHaveBeenCalledTimes(1)
     expect(panels.closeDetails).toHaveBeenCalledTimes(1)
+    expect(panels.openPreview).toHaveBeenCalledTimes(1)
+    expect(panels.closePreview).toHaveBeenCalledTimes(1)
     expect(panels.setSidebar).not.toHaveBeenCalled()
     expect(panels.setDetails).not.toHaveBeenCalled()
   })
@@ -41,6 +48,8 @@ describe('LayoutController', () => {
     expect(() => { service.toggleSidebar() }).toThrow(/panel actions not wired/)
     expect(() => { service.openDetails() }).toThrow(/panel actions not wired/)
     expect(() => { service.closeDetails() }).toThrow(/panel actions not wired/)
+    expect(() => { service.openPreview() }).toThrow(/panel actions not wired/)
+    expect(() => { service.closePreview() }).toThrow(/panel actions not wired/)
   })
 
   it('re-attach overwrites the stale action set (entry re-register)', () => {

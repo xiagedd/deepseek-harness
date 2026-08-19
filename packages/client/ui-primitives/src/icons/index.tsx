@@ -870,3 +870,27 @@ export const IconArchiveOutline20 = ({ size = 20, className }: IconProps) => (
     <path d="M12.7962 12.5661V11.0832H7.20548V12.5661L12.7962 12.5661Z" fill="currentColor" />
   </svg>
 )
+
+/** file_outline_16: generic document for explorer rows that are not a typed kind. */
+export const IconFileOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M4.25 1.4H9.02L13.1 5.48V13.35C13.1 14.068 12.518 14.65 11.8 14.65H4.25C3.532 14.65 2.95 14.068 2.95 13.35V2.7C2.95 1.982 3.532 1.4 4.25 1.4ZM9.35 2.75V5.75H12.35L9.35 2.75ZM4.25 2.7V13.35H11.8V7.05H8.7C8.258 7.05 7.9 6.692 7.9 6.25V2.7H4.25Z"
+      fill="currentColor"
+    />
+  </svg>
+)
+
+/** image_outline_16: picture frame for image explorer rows. */
+export const IconImageOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M3.15 2.15H12.85C13.568 2.15 14.15 2.732 14.15 3.45V12.55C14.15 13.268 13.568 13.85 12.85 13.85H3.15C2.432 13.85 1.85 13.268 1.85 12.55V3.45C1.85 2.732 2.432 2.15 3.15 2.15ZM12.85 3.45H3.15V9.2L5.2 7.15L7.55 9.5L10.45 6.6L12.85 9V3.45ZM5.15 6.2C5.702 6.2 6.15 5.752 6.15 5.2C6.15 4.648 5.702 4.2 5.15 4.2C4.598 4.2 4.15 4.648 4.15 5.2C4.15 5.752 4.598 6.2 5.15 6.2Z"
+      fill="currentColor"
+    />
+  </svg>
+)

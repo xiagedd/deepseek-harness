@@ -12,6 +12,10 @@ import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import { DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
 import type { DirectoryPickerCapability } from '@deepseek-ai/dsh-host-directory-picker'
+import { FileSystem, FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
+import type {
+  FsDirEntry, FsEditOutcome, FsEditRequest, FsInfo, FsPathInfo, FsTarget, FsWriteIntent, FsWriteOutcome,
+} from '@deepseek-ai/dsh-fs'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import type { HostFrame, WorkspaceId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { RpcRequest, RpcResponse } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
@@ -63,7 +67,12 @@ async function harness(
   picker: DirectoryPickerCapability = { kind: 'native', pick: async () => null },
   extras: {
     openPath?: (path: string, signal: AbortSignal) => Promise<void>
+    revealPath?: (path: string, signal: AbortSignal) => Promise<void>
     canOpenPath?: () => boolean
+    resolveRestartWebScript?: (cwd: string) => string | undefined
+    spawnRestartWeb?: (request: { scriptPath: string; port: number; cwd: string }) => void
+    scheduleRestartWeb?: (work: () => void) => void
+    restartListenPort?: number
   } = {},
 ) {
   const ctx = new Context()
@@ -106,7 +115,12 @@ async function harness(
     defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
     cwd: root,
     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
+    ...extras.revealPath === undefined ? {} : { revealPath: extras.revealPath },
     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
+    ...extras.resolveRestartWebScript === undefined ? {} : { resolveRestartWebScript: extras.resolveRestartWebScript },
+    ...extras.spawnRestartWeb === undefined ? {} : { spawnRestartWeb: extras.spawnRestartWeb },
+    ...extras.scheduleRestartWeb === undefined ? {} : { scheduleRestartWeb: extras.scheduleRestartWeb },
+    ...extras.restartListenPort === undefined ? {} : { restartListenPort: extras.restartListenPort },
   })
   return { api, ctx, storageDomain, root }
 }
@@ -228,6 +242,238 @@ describe('host.listDirectory / host.createDirectory', () => {
   })
 })
 
+/** In-memory `ctx.fs` for the workspace file-tree RPCs (not the folder-only picker). */
+class WorkspaceFsFake extends FileSystem {
+  listed: FsDirEntry[] = [
+    {
+      name: '.hidden.txt',
+      type: 'file',
+      target: { targetKey: FsTargetKey('/ws/.hidden.txt'), displayPath: '/ws/.hidden.txt' },
+      size: 3,
+      version: FsVersion('v1'),
+    },
+    {
+      name: 'notes.md',
+      type: 'file',
+      target: { targetKey: FsTargetKey('/ws/notes.md'), displayPath: '/ws/notes.md' },
+      size: 4,
+      version: FsVersion('v1'),
+    },
+    {
+      name: 'src',
+      type: 'directory',
+      target: { targetKey: FsTargetKey('/ws/src'), displayPath: '/ws/src' },
+      version: FsVersion('v1'),
+    },
+  ]
+  failWith: InstanceType<typeof FsError> | undefined
+  lastWrite: { path: string; content: string } | undefined
+  lastRead: string | undefined
+  fileText = new Map<string, string>([['/ws/notes.md', 'note']])
+
+  override async resolve(path: string, opts?: { signal?: AbortSignal }): Promise<FsTarget> {
+    if (opts?.signal?.aborted) throw new FsError('resolve aborted', 'FS_ABORTED')
+    if (this.failWith) throw this.failWith
+    return { targetKey: FsTargetKey(path), displayPath: path }
+  }
+  override processPath(target: FsTarget): string { return target.displayPath }
+  override fileUrl(target: FsTarget): string { return `file://${target.displayPath}` }
+  override contains(): boolean { return false }
+  override async stat(): Promise<FsInfo | undefined> { return undefined }
+  override async lstat(): Promise<FsPathInfo | undefined> { return undefined }
+  override async readText(target: FsTarget): Promise<string> {
+    if (this.failWith) throw this.failWith
+    this.lastRead = target.displayPath
+    const stored = this.fileText.get(target.displayPath)
+    if (stored === undefined) throw new FsError('not text', 'FS_NOT_FOUND')
+    return stored
+  }
+  override async streamText(): Promise<AsyncIterable<string>> {
+    return (async function* () { yield '' })()
+  }
+  override async readBytes(): Promise<Uint8Array> { return new Uint8Array() }
+  override async listDir(_target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
+    if (signal?.aborted) throw new FsError('listing aborted', 'FS_ABORTED')
+    if (this.failWith) throw this.failWith
+    return this.listed
+  }
+  override async writeText(target: FsTarget, content: string, _expected?: FsWriteIntent): Promise<FsWriteOutcome> {
+    if (this.failWith) throw this.failWith
+    this.lastWrite = { path: target.displayPath, content }
+    this.fileText.set(target.displayPath, content)
+    return { operation: 'create', version: FsVersion('v1'), before: null, after: content }
+  }
+  override async editText(_target: FsTarget, _edit: FsEditRequest): Promise<FsEditOutcome> {
+    return { version: FsVersion('v1'), before: '', after: '' }
+  }
+  override async mkdir(target: FsTarget): Promise<void> {
+    if (this.failWith) throw this.failWith
+    this.listed.push({
+      name: target.displayPath.slice(target.displayPath.lastIndexOf('/') + 1),
+      type: 'directory',
+      target,
+      version: FsVersion('v1'),
+    })
+  }
+  override async rename(_source: FsTarget, destination: FsTarget): Promise<void> {
+    if (this.failWith) throw this.failWith
+    this.listed.push({
+      name: destination.displayPath.slice(destination.displayPath.lastIndexOf('/') + 1),
+      type: 'file',
+      target: destination,
+      version: FsVersion('v1'),
+    })
+  }
+  override async delete(_target: FsTarget): Promise<void> {
+    if (this.failWith) throw this.failWith
+  }
+  override async copy(_source: FsTarget, destination: FsTarget): Promise<void> {
+    if (this.failWith) throw this.failWith
+    this.listed.push({
+      name: destination.displayPath.slice(destination.displayPath.lastIndexOf('/') + 1),
+      type: 'file',
+      target: destination,
+      size: 1,
+      version: FsVersion('v1'),
+    })
+  }
+}
+
+describe('host.listEntries / host.mkdir / host.rename / host.delete / host.copy / host.writeText / host.readText', () => {
+  it('lists files and folders through ctx.fs without changing the folder-only picker', async () => {
+    const { api, ctx } = await harness(undefined, BROWSE_STUB)
+    await ctx.plugin(WorkspaceFsFake)
+    const picker = await api.host.listDirectory(request({ path: '/home/user' }), new AbortController().signal)
+    expect(picker.result).toMatchObject({
+      ok: true,
+      value: { entries: [{ name: 'projects', path: '/home/user/projects', hidden: false }] },
+    })
+    const listed = await api.host.listEntries(request({ path: '/ws' }), new AbortController().signal)
+    expect(listed.result).toEqual({
+      ok: true,
+      value: {
+        path: '/ws',
+        entries: [
+          { name: '.hidden.txt', path: '/ws/.hidden.txt', type: 'file', hidden: true, size: 3 },
+          { name: 'notes.md', path: '/ws/notes.md', type: 'file', hidden: false, size: 4 },
+          { name: 'src', path: '/ws/src', type: 'directory', hidden: false },
+        ],
+      },
+    })
+  })
+
+  it('filters listEntries from live workspace ignore files on every request', async () => {
+    const { api, ctx } = await harness()
+    await ctx.plugin(WorkspaceFsFake)
+    const fs = ctx.fs as WorkspaceFsFake
+    fs.listed.push(
+      {
+        name: 'Library',
+        type: 'directory',
+        target: { targetKey: FsTargetKey('/ws/Library'), displayPath: '/ws/Library' },
+        version: FsVersion('v1'),
+      },
+      {
+        name: '.idea',
+        type: 'directory',
+        target: { targetKey: FsTargetKey('/ws/.idea'), displayPath: '/ws/.idea' },
+        version: FsVersion('v1'),
+      },
+      {
+        name: 'Game.cs.meta',
+        type: 'file',
+        target: { targetKey: FsTargetKey('/ws/Game.cs.meta'), displayPath: '/ws/Game.cs.meta' },
+        version: FsVersion('v1'),
+      },
+    )
+    fs.fileText.set('/ws/.dshignore', 'Library/\n.idea/\n*.meta\n')
+
+    const first = expectOk(await api.host.listEntries(
+      request({ path: '/ws', root: '/ws' }),
+      new AbortController().signal,
+    ))
+    expect(first.entries.map(entry => entry.name)).not.toEqual(
+      expect.arrayContaining(['Library', '.idea', 'Game.cs.meta']),
+    )
+
+    fs.fileText.set('/ws/.dshignore', '.idea/\n')
+    const refreshed = expectOk(await api.host.listEntries(
+      request({ path: '/ws', root: '/ws' }),
+      new AbortController().signal,
+    ))
+    expect(refreshed.entries.map(entry => entry.name)).toContain('Library')
+    expect(refreshed.entries.map(entry => entry.name)).not.toContain('.idea')
+  })
+
+  it('creates, renames, copies, deletes, and writes through ctx.fs', async () => {
+    const { api, ctx } = await harness()
+    await ctx.plugin(WorkspaceFsFake)
+    expect((await api.host.mkdir(request({ path: '/ws/fresh' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/fresh' } })
+    expect((await api.host.rename(request({ from: '/ws/notes.md', to: '/ws/renamed.md' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/renamed.md' } })
+    expect((await api.host.copy(request({ from: '/ws/notes.md', to: '/ws/copy.md' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/copy.md' } })
+    expect((await api.host.delete(request({ path: '/ws/copy.md' }))).result)
+      .toEqual({ ok: true, value: { deleted: true } })
+    expect((await api.host.writeText(request({ path: '/ws/empty.txt' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/empty.txt' } })
+    expect((ctx.fs as WorkspaceFsFake).lastWrite).toEqual({ path: '/ws/empty.txt', content: '' })
+    expect((await api.host.writeText(request({ path: '/ws/notes.md', content: 'hi' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/notes.md' } })
+    expect((ctx.fs as WorkspaceFsFake).lastWrite).toEqual({ path: '/ws/notes.md', content: 'hi' })
+    expect((await api.host.readText(request({ path: '/ws/notes.md' }))).result)
+      .toEqual({ ok: true, value: { path: '/ws/notes.md', content: 'hi' } })
+    expect((ctx.fs as WorkspaceFsFake).lastRead).toBe('/ws/notes.md')
+  })
+
+  it('reports missing ctx.fs as internal rather than falling back to node:fs', async () => {
+    const { api } = await harness()
+    expect((await api.host.listEntries(request({ path: '/ws' }), new AbortController().signal)).result)
+      .toMatchObject({ ok: false, error: { code: 'internal', message: 'host.listEntries needs ctx.fs' } })
+    expect((await api.host.mkdir(request({ path: '/ws/fresh' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal', message: 'host.mkdir needs ctx.fs' } })
+    expect((await api.host.rename(request({ from: '/a', to: '/b' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal' } })
+    expect((await api.host.delete(request({ path: '/a' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal' } })
+    expect((await api.host.copy(request({ from: '/a', to: '/b' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal' } })
+    expect((await api.host.writeText(request({ path: '/ws/a.txt' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal', message: 'host.writeText needs ctx.fs' } })
+    expect((await api.host.readText(request({ path: '/ws/a.txt' }))).result)
+      .toMatchObject({ ok: false, error: { code: 'internal', message: 'host.readText needs ctx.fs' } })
+  })
+
+  it('maps provider FsError onto fs-failed without swallowing the reason', async () => {
+    const { api, ctx } = await harness()
+    await ctx.plugin(WorkspaceFsFake)
+    const fs = ctx.fs as WorkspaceFsFake
+    fs.failWith = new FsError('already there', 'FS_ALREADY_EXISTS')
+    expect((await api.host.mkdir(request({ path: '/ws/taken' }))).result).toMatchObject({
+      ok: false,
+      error: { code: 'fs-failed', details: { path: '/ws/taken', reason: 'FS_ALREADY_EXISTS' } },
+    })
+    expect((await api.host.writeText(request({ path: '/ws/taken.txt', content: 'x' }))).result).toMatchObject({
+      ok: false,
+      error: { code: 'fs-failed', details: { path: '/ws/taken.txt', reason: 'FS_ALREADY_EXISTS' } },
+    })
+    expect((await api.host.readText(request({ path: '/ws/taken.txt' }))).result).toMatchObject({
+      ok: false,
+      error: { code: 'fs-failed', details: { path: '/ws/taken.txt', reason: 'FS_ALREADY_EXISTS' } },
+    })
+  })
+
+  it('reports an aborted listing as cancelled', async () => {
+    const { api, ctx } = await harness()
+    await ctx.plugin(WorkspaceFsFake)
+    const abort = new AbortController()
+    abort.abort()
+    expect((await api.host.listEntries(request({ path: '/ws' }), abort.signal)).result)
+      .toMatchObject({ ok: false, error: { code: 'cancelled' } })
+  })
+})
+
 describe('host.openPath', () => {
   it('describes whether this deployment can reach a user-visible native desktop', async () => {
     const visible = await harness(undefined, undefined, { canOpenPath: () => true })
@@ -256,6 +502,143 @@ describe('host.openPath', () => {
     const pending = api.host.openPath(request({ path: '/tmp/a.txt' }), abort.signal)
     abort.abort()
     expect((await pending).result).toMatchObject({ ok: false, error: { code: 'cancelled' } })
+  })
+})
+
+describe('host.revealPath', () => {
+  it('reveals through the injected native boundary', async () => {
+    const revealed: string[] = []
+    const { api } = await harness(undefined, undefined, {
+      revealPath: async (path) => { revealed.push(path) },
+    })
+    expect((await api.host.revealPath(request({ path: '/tmp/a.txt' }), new AbortController().signal)).result)
+      .toEqual({ ok: true, value: { revealed: true } })
+    expect(revealed).toEqual(['/tmp/a.txt'])
+  })
+
+  it('propagates abort into the native reveal boundary as a cancelled RPC error', async () => {
+    const { api } = await harness(undefined, undefined, {
+      revealPath: (_path, signal) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+      }),
+    })
+    const abort = new AbortController()
+    const pending = api.host.revealPath(request({ path: '/tmp/a.txt' }), abort.signal)
+    abort.abort()
+    expect((await pending).result).toMatchObject({ ok: false, error: { code: 'cancelled' } })
+  })
+})
+
+describe('host.restartWeb', () => {
+  it('accepts a port-only payload, returns before spawn, and never forwards extra argv', async () => {
+    const spawned: Array<{ scriptPath: string; port: number; cwd: string }> = []
+    let scheduled: (() => void) | undefined
+    const { api, root } = await harness(undefined, undefined, {
+      resolveRestartWebScript: cwd => join(cwd, 'scripts', 'restart-dsh-web.mjs'),
+      spawnRestartWeb: (request) => { spawned.push(request) },
+      scheduleRestartWeb: (work) => { scheduled = work },
+      restartListenPort: 3080,
+    })
+    expect((await api.host.restartWeb(request({}))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+    expect(spawned).toEqual([])
+    scheduled?.()
+    expect(spawned).toEqual([{
+      scriptPath: join(root, 'scripts', 'restart-dsh-web.mjs'),
+      port: 3080,
+      cwd: root,
+    }])
+  })
+
+  it('uses the payload port and hosted listen port fallbacks', async () => {
+    const spawned: number[] = []
+    const { api } = await harness(undefined, undefined, {
+      resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+      spawnRestartWeb: (request) => { spawned.push(request.port) },
+      scheduleRestartWeb: (work) => { work() },
+      restartListenPort: 3090,
+    })
+    expect((await api.host.restartWeb(request({ port: 4100 }))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 4100 } })
+    expect(spawned).toEqual([4100])
+  })
+
+  it('refuses when the restart script is missing and does not spawn', async () => {
+    const spawnRestartWeb = vi.fn()
+    const { api, root } = await harness(undefined, undefined, {
+      spawnRestartWeb,
+      scheduleRestartWeb: (work) => { work() },
+    })
+    expect((await api.host.restartWeb(request({}))).result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'internal',
+        message: `host.restartWeb cannot find scripts/restart-dsh-web.mjs under ${root}`,
+      },
+    })
+    expect(spawnRestartWeb).not.toHaveBeenCalled()
+  })
+
+  it('logs a spawn failure after accept without rolling back the response', async () => {
+    const { api } = await harness(undefined, undefined, {
+      resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+      spawnRestartWeb: () => { throw new Error('spawn blocked') },
+      scheduleRestartWeb: (work) => { work() },
+    })
+    expect((await api.host.restartWeb(request({}))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+  })
+
+  it('stringifies a non-Error spawn throw after accept', async () => {
+    const { api } = await harness(undefined, undefined, {
+      resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+      spawnRestartWeb: () => { throw 'spawn blocked' },
+      scheduleRestartWeb: (work) => { work() },
+    })
+    expect((await api.host.restartWeb(request({}))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+  })
+
+  it('reads the live webServer port when payload and config omit it', async () => {
+    const spawned: number[] = []
+    const { api, ctx } = await harness(undefined, undefined, {
+      resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+      spawnRestartWeb: (request) => { spawned.push(request.port) },
+      scheduleRestartWeb: (work) => { work() },
+    })
+    ctx.provide('webServer', { port: 4090 } as never)
+    expect((await api.host.restartWeb(request({}))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 4090 } })
+    expect(spawned).toEqual([4090])
+  })
+
+  it('schedules spawn after accept when no scheduler is injected', async () => {
+    vi.useFakeTimers()
+    try {
+      const spawnRestartWeb = vi.fn()
+      const { api } = await harness(undefined, undefined, {
+        resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+        spawnRestartWeb,
+      })
+      expect((await api.host.restartWeb(request({}))).result)
+        .toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+      expect(spawnRestartWeb).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(300)
+      expect(spawnRestartWeb).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('binds the production spawner after accept without invoking it in tests', async () => {
+    let scheduled: (() => void) | undefined
+    const { api } = await harness(undefined, undefined, {
+      resolveRestartWebScript: () => '/repo/scripts/restart-dsh-web.mjs',
+      scheduleRestartWeb: (work) => { scheduled = work },
+    })
+    expect((await api.host.restartWeb(request({}))).result)
+      .toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+    expect(scheduled).toEqual(expect.any(Function))
   })
 })
 

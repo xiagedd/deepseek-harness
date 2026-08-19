@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-18-settings-yaml-write-backup.md
+2026-08-18-settings-yaml-write-backup.md: 706202daec0bf08ff75c2b617297045c964ee4ed
+2026-08-18-settings-yaml-write-backup.zh.md: 7694373f6cc138eee5db1c92e7de865417ff7a46

@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { CommandClaim, ReferenceInsert, TokenSpan } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { InputEffect, SubmitAttempt } from '../src/client/input/contract.ts'
 import { InputMachine, PLACEHOLDER, projectClipboard } from '../src/client/input/machine.ts'
-import { deriveDecorations, scanTextRefs } from '../src/client/input/decorations.ts'
+import { chipDisplayLabel, deriveDecorations, scanTextRefs } from '../src/client/input/decorations.ts'
 
 const P = PLACEHOLDER
 
@@ -666,6 +666,26 @@ describe('decorations: scanTextRefs', () => {
   })
 })
 
+describe('chipDisplayLabel', () => {
+  it('reduces a workspace-relative path to its basename', () => {
+    expect(chipDisplayLabel('Assets/script/Logic/Activity/CFishingExpertSetActivity.cs'))
+      .toBe('CFishingExpertSetActivity.cs')
+  })
+
+  it('accepts windows separators', () => {
+    expect(chipDisplayLabel('src\\deep\\a.ts')).toBe('a.ts')
+  })
+
+  it('returns a separatorless token unchanged (subagent/skill chips)', () => {
+    expect(chipDisplayLabel('@w1')).toBe('@w1')
+    expect(chipDisplayLabel('alpha')).toBe('alpha')
+  })
+
+  it('keeps the full label when the path ends in a separator', () => {
+    expect(chipDisplayLabel('src/dir/')).toBe('src/dir/')
+  })
+})
+
 describe('input-machine: decorations', () => {
   it('projects chips from the occurrence table with identity, offset, label, and invalid bit', () => {
     const m = new InputMachine()
@@ -674,7 +694,7 @@ describe('input-machine: decorations', () => {
     m.dispatch({ type: 'set-invalid', invalidIds: [1] })
     expect(deriveDecorations(m.state)).toEqual({
       token: null,
-      chips: [{ occurrenceId: 1, offset: 0, label: 'alpha', invalid: true }],
+      chips: [{ occurrenceId: 1, offset: 0, label: 'alpha', invalid: true, revealRef: null }],
       textRefs: [],
       hint: null,
     })

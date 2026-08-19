@@ -37,6 +37,13 @@ const NATIVE_SET_START = Object.getOwnPropertyDescriptor(Range.prototype, 'setSt
 const SCTX = {} as ClientContext
 const SID = 's1' as SessionId
 
+/** OS-drop File with Electron's non-standard native `path`. */
+function nativeFile(body: string, name: string, type: string, path: string): File {
+  const file = new File([body], name, { type })
+  Object.defineProperty(file, 'path', { value: path })
+  return file
+}
+
 function snapshotOf(overrides: Partial<ConversationSnapshot> = {}): ConversationSnapshot {
   return {
     sessionId: SID, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
@@ -85,7 +92,9 @@ interface BenchOptions {
   leftItems?: React.ReactNode
   rightItems?: React.ReactNode
   attachments?: readonly ComposerAttachment[]
-  addImages?: (files: readonly File[]) => string | null
+  addImages?: ((files: readonly File[]) => string | null) | undefined
+  /** Session workspace root used to spell path-chip labels. */
+  cwd?: string
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
@@ -146,7 +155,9 @@ function bench(over?: BenchOptions) {
     SessionProvider: ({ children }) => children(SID),
     useSession: bindSnapshotSelector(session),
     useSessions: bindSnapshotSelector(createSnapshotStore({
-      ids: [], byId: {}, current: undefined, phase: 'ready',
+      ids: over?.cwd !== undefined ? [SID] : [],
+      byId: over?.cwd !== undefined ? { [SID]: { cwd: over.cwd } } : {},
+      current: undefined, phase: 'ready',
       subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
     })),
     useWorkspaces: bindSnapshotSelector(createSnapshotStore({
@@ -160,7 +171,7 @@ function bench(over?: BenchOptions) {
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
     keyboard: shell,
-    addImages: over?.addImages ?? (() => null),
+    addImages: over !== undefined && Object.hasOwn(over, 'addImages') ? over.addImages : (() => null),
     removeImage,
     draftImages: ids => ids.flatMap((id) => {
       const attachment = over?.attachments?.find(candidate => candidate.id === id)
@@ -202,6 +213,10 @@ function bench(over?: BenchOptions) {
     menuLauncher,
     steerQueue: over?.steerQueue,
   }
+}
+
+function dropFiles(files: File[]): void {
+  fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files, dropEffect: 'none' } })
 }
 
 describe('image draft rail', () => {
@@ -297,7 +312,7 @@ describe('image draft rail', () => {
     expect(within.view.queryByRole('alert')).toBeNull()
   })
 
-  it('announces the format problem before any limit when the batch holds a non-image', () => {
+  it('announces the format problem before any limit when the batch holds an unsupported image type', () => {
     const addImages = vi.fn(() => '仅支持 PNG、JPG、WebP、GIF 格式的图片')
     const { view } = bench({
       addImages,
@@ -309,10 +324,10 @@ describe('image draft rail', () => {
         mediaTypes: ['image/png'] as const,
       },
     })
-    // Oversized AND over-count AND wrong type: the format rejection wins.
+    // Oversized AND over-count AND wrong image type: the format rejection wins.
     const files = [
-      new File([new ArrayBuffer(64)], 'a.pdf', { type: 'application/pdf' }),
-      new File([new ArrayBuffer(64)], 'b.pdf', { type: 'application/pdf' }),
+      new File([new ArrayBuffer(64)], 'a.bmp', { type: 'image/bmp' }),
+      new File([new ArrayBuffer(64)], 'b.bmp', { type: 'image/bmp' }),
     ]
     fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files, dropEffect: 'none' } })
     expect(addImages).toHaveBeenCalledWith(files)
@@ -363,6 +378,199 @@ describe('image draft rail', () => {
     fireEvent.drop(document.body, { dataTransfer })
     expect(addImages).not.toHaveBeenCalled()
     expect(view.queryByRole('status')).toBeNull()
+  })
+
+  it('inserts a workspace-file path chip for a dropped text file (not the file body)', () => {
+    const addImages = vi.fn(() => null)
+    const body = 'SECRET_FILE_BODY'
+    const file = nativeFile(body, 'notes.md', 'text/plain', '/ws/src/notes.md')
+    const { view, shell } = bench({ addImages, cwd: '/ws' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).not.toContain(body)
+    expect(shell.snapshot.draft).toBe('\uFFFC ')
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({
+      source: 'workspace-file', ref: '/ws/src/notes.md', label: 'src/notes.md',
+      clipboardText: '/ws/src/notes.md',
+    })])
+    // The chip cell shows the basename (the recognizable part); the full
+    // workspace-relative path rides the chip title and the machine occurrence.
+    expect(view.container.querySelector('[data-decoration="chip"]')?.textContent).toBe('notes.md')
+    expect(view.container.querySelector<HTMLElement>('[data-decoration="chip"]')?.title).toBe('src/notes.md')
+    const remove = view.container.querySelector('[data-chip-remove]')
+    expect(remove?.getAttribute('aria-label')).toBe('移除引用 notes.md')
+    fireEvent.click(remove!)
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(shell.snapshot.draft).toBe(' ')
+  })
+
+  it('inserts a folder path chip without listing directory contents', () => {
+    const addImages = vi.fn(() => null)
+    const folder = nativeFile('', 'nested', '', '/ws/src/nested')
+    const { shell } = bench({ addImages, cwd: '/ws' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [folder], dropEffect: 'none' } })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({
+      source: 'workspace-file', ref: '/ws/src/nested', label: 'src/nested',
+    })])
+  })
+
+  it('toasts when a non-image drop has no native path and does not read the file', () => {
+    const addImages = vi.fn(() => null)
+    const body = 'SHOULD_NOT_ENTER_DRAFT'
+    const file = new File([body], 'secret.txt', { type: 'text/plain' })
+    const { view, shell } = bench({ addImages })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).toBe('')
+    expect(shell.snapshot.draft).not.toContain(body)
+    expect(view.getByRole('alert').textContent).toContain('无法获取本地路径，未插入引用')
+  })
+
+  it('splits a mixed drop: images attach, pathed files become chips', () => {
+    const addImages = vi.fn(() => null)
+    const image = new File([Uint8Array.of(1)], 'shot.png', { type: 'image/png' })
+    const notes = nativeFile('body', 'a.ts', 'text/plain', 'H:\\repo\\src\\a.ts')
+    const { shell } = bench({ addImages, cwd: 'H:\\repo' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [image, notes], dropEffect: 'none' } })
+    expect(addImages).toHaveBeenCalledWith([image])
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({
+      source: 'workspace-file', ref: 'H:\\repo\\src\\a.ts', label: 'src/a.ts',
+    })])
+  })
+
+  it('attaches images and toasts path-less siblings without pretending the text file succeeded', () => {
+    const addImages = vi.fn(() => null)
+    const image = new File([Uint8Array.of(1)], 'shot.png', { type: 'image/png' })
+    const notes = new File(['body'], 'a.ts', { type: 'text/plain' })
+    const { view } = bench({ addImages })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [image, notes], dropEffect: 'none' } })
+    expect(addImages).toHaveBeenCalledWith([image])
+    expect(view.getByRole('alert').textContent).toContain('无法获取本地路径，未插入引用')
+  })
+
+  it('toasts and inserts nothing when cwd is missing', () => {
+    const file = nativeFile('x', 'solo.ts', 'text/plain', '/tmp/solo.ts')
+    const { view, shell } = bench()
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(shell.snapshot.draft).toBe('')
+    expect(view.getByRole('alert').textContent).toContain('文件不在当前工作区内，未插入引用')
+    expect(view.container.querySelector('textarea')).not.toBeNull()
+  })
+
+  it('toasts and inserts nothing when session cwd is empty', () => {
+    const file = nativeFile('x', 'solo.ts', 'text/plain', '/tmp/solo.ts')
+    const { view, shell } = bench({ cwd: '' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(view.getByRole('alert').textContent).toContain('文件不在当前工作区内，未插入引用')
+  })
+
+  it('toasts a path outside the workspace and does not invent a chip', () => {
+    const file = nativeFile('x', 'solo.ts', 'text/plain', '/tmp/solo.ts')
+    const { view, shell } = bench({ cwd: '/ws' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(view.getByRole('alert').textContent).toContain('文件不在当前工作区内，未插入引用')
+  })
+
+  it('inserts in-workspace chips and toasts the outside-workspace sibling', () => {
+    const inside = nativeFile('a', 'a.ts', 'text/plain', '/ws/a.ts')
+    const outside = nativeFile('b', 'b.ts', 'text/plain', '/tmp/b.ts')
+    const { view, shell } = bench({ cwd: '/ws' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [inside, outside], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({
+      source: 'workspace-file', ref: '/ws/a.ts', label: 'a.ts',
+    })])
+    expect(view.getByRole('alert').textContent).toContain('文件不在当前工作区内，未插入引用')
+  })
+
+  it('does not replace an existing subagent chip when a path file is dropped', () => {
+    const { shell } = bench({ cwd: '/ws' })
+    act(() => {
+      shell.setDraft('参考 @w1 ')
+      shell.insertReference(
+        { source: 'subagent', ref: 'w1', label: '@w1', clipboardText: '@w1' },
+        { start: 3, end: 6, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    fireEvent.drop(document.body, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [nativeFile('x', 'a.ts', 'text/plain', '/ws/a.ts')],
+        dropEffect: 'none',
+      },
+    })
+    expect(shell.snapshot.occurrences.map(row => row.source).sort()).toEqual(['subagent', 'workspace-file'])
+    expect(shell.snapshot.occurrences.some(row => row.source === 'subagent' && row.label === '@w1')).toBe(true)
+    expect(shell.snapshot.occurrences.some(row => row.source === 'workspace-file' && row.label === 'a.ts')).toBe(true)
+  })
+
+  it('toasts and stays mounted when sessionId is unset so cwd cannot be read', () => {
+    const a = nativeFile('a', 'a.ts', 'text/plain', '/ws/a.ts')
+    const b = nativeFile('b', 'b.ts', 'text/plain', '/ws/b.ts')
+    const { view, props, shell } = bench({ cwd: '/ws' })
+    view.rerender(<InputBar {...props} sessionId={undefined} />)
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [a, b], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(view.getByRole('alert').textContent).toContain('文件不在当前工作区内，未插入引用')
+    expect(view.container.querySelector('textarea')).not.toBeNull()
+  })
+
+  it('path chips still work when the image service is absent', () => {
+    const file = nativeFile('x', 'a.ts', 'text/plain', '/ws/a.ts')
+    const { shell } = bench({ addImages: undefined, cwd: '/ws' })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [file], dropEffect: 'none' } })
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({ label: 'a.ts', ref: '/ws/a.ts' })])
+  })
+
+  it('inserts two in-workspace path chips from one drop', () => {
+    const { shell } = bench({ cwd: '/ws' })
+    dropFiles([
+      nativeFile('a', 'a.ts', 'text/plain', '/ws/a.ts'),
+      nativeFile('b', 'b.ts', 'text/plain', '/ws/src/b.ts'),
+    ])
+    expect(shell.snapshot.occurrences.map(row => row.label)).toEqual(['a.ts', 'src/b.ts'])
+  })
+
+  it('an empty Files drop is a no-op', () => {
+    const addImages = vi.fn(() => null)
+    const { shell } = bench({ addImages })
+    fireEvent.drop(document.body, { dataTransfer: { types: ['Files'], files: [], dropEffect: 'none' } })
+    expect(addImages).not.toHaveBeenCalled()
+    expect(shell.snapshot.draft).toBe('')
+  })
+
+  it('toasts a refused insertReference so the failed drop is visible', () => {
+    const { shell, view } = bench({ cwd: '/ws' })
+    vi.spyOn(shell, 'insertReference').mockImplementation(() => {
+      throw new Error('rpc-failed')
+    })
+    fireEvent.drop(document.body, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [nativeFile('x', 'a.ts', 'text/plain', '/ws/a.ts')],
+        dropEffect: 'none',
+      },
+    })
+    expect(shell.snapshot.draft).toBe('')
+    expect(view.container.querySelector('textarea')).not.toBeNull()
+    expect(view.getByRole('alert').textContent).toContain('无法获取本地路径，未插入引用')
+  })
+
+  it('toasts when insertReference refuses the chip and stops the batch', () => {
+    const { shell, view } = bench({ cwd: '/ws' })
+    vi.spyOn(shell, 'insertReference').mockReturnValue(false)
+    fireEvent.drop(document.body, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [nativeFile('x', 'a.ts', 'text/plain', '/ws/a.ts')],
+        dropEffect: 'none',
+      },
+    })
+    expect(shell.snapshot.draft).toBe('')
+    expect(view.getByRole('alert').textContent).toContain('无法获取本地路径，未插入引用')
   })
 
   it('sends an image-only draft and removes its thumbnail', () => {
@@ -824,116 +1032,6 @@ describe('running and lock semantics', () => {
     expect(backdrop.textContent).toBe('line\n'.repeat(40))
   })
 
-  it('repairs Safari native overflow after the mirror shrinks the draft', () => {
-    const vendor = vi.spyOn(window.navigator, 'vendor', 'get').mockReturnValue('Apple Computer, Inc.')
-    const userAgent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
-      'Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15',
-    )
-    onTestFinished(() => {
-      vendor.mockRestore()
-      userAgent.mockRestore()
-    })
-    const { textarea } = bench({ draft: 'two wrapped lines' })
-    const scrollport = textarea.closest<HTMLElement>('[data-input-scroll]')!
-    let inputRepaired = false
-    let scrollportRepaired = false
-    const inputLayouts: string[] = []
-    const scrollportLayouts: string[] = []
-    Object.defineProperty(textarea, 'clientHeight', {
-      configurable: true,
-      get: () => textarea.style.height === '29px' ? 29 : 28,
-    })
-    Object.defineProperty(textarea, 'scrollHeight', {
-      configurable: true,
-      get: () => inputRepaired ? 28 : 52,
-    })
-    Object.defineProperty(textarea, 'offsetHeight', {
-      configurable: true,
-      get: () => {
-        inputLayouts.push(textarea.style.height)
-        if (textarea.style.height === '') inputRepaired = true
-        return textarea.clientHeight
-      },
-    })
-    Object.defineProperty(scrollport, 'clientHeight', {
-      configurable: true,
-      get: () => {
-        if (scrollport.style.height === '53px') return 53
-        if (inputRepaired && !scrollportRepaired) return 52
-        return 28
-      },
-    })
-    Object.defineProperty(scrollport, 'offsetHeight', {
-      configurable: true,
-      get: () => {
-        scrollportLayouts.push(scrollport.style.height)
-        if (scrollport.style.height === '') scrollportRepaired = true
-        return scrollport.clientHeight
-      },
-    })
-    textarea.setSelectionRange(5, 5)
-
-    fireEvent.change(textarea, { target: { value: 'one line' } })
-
-    expect(inputLayouts).toEqual(['29px', ''])
-    expect(scrollportLayouts).toEqual(['53px', ''])
-    expect(textarea.style.height).toBe('')
-    expect(scrollport.style.height).toBe('')
-    expect(textarea.scrollHeight).toBe(textarea.clientHeight)
-    expect(scrollport.clientHeight).toBe(28)
-  })
-
-  it('does not force the Safari recovery for another iOS browser', () => {
-    const vendor = vi.spyOn(window.navigator, 'vendor', 'get').mockReturnValue('Apple Computer, Inc.')
-    const userAgent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
-      'Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1',
-    )
-    onTestFinished(() => {
-      vendor.mockRestore()
-      userAgent.mockRestore()
-    })
-    const { textarea } = bench({ draft: 'two wrapped lines' })
-    const scrollport = textarea.closest<HTMLElement>('[data-input-scroll]')!
-    Object.defineProperty(textarea, 'clientHeight', { configurable: true, value: 28 })
-    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, value: 52 })
-    Object.defineProperty(textarea, 'offsetHeight', {
-      configurable: true,
-      get: () => { throw new Error('non-Safari browser must not force textarea layout') },
-    })
-    Object.defineProperty(scrollport, 'offsetHeight', {
-      configurable: true,
-      get: () => { throw new Error('non-Safari browser must not force scrollport layout') },
-    })
-
-    fireEvent.change(textarea, { target: { value: 'one line' } })
-
-    expect(scrollport.style.height).toBe('')
-  })
-
-  it('does not read Safari layout while a native edit grows the draft', () => {
-    const vendor = vi.spyOn(window.navigator, 'vendor', 'get').mockReturnValue('Apple Computer, Inc.')
-    const userAgent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
-      'Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15',
-    )
-    onTestFinished(() => {
-      vendor.mockRestore()
-      userAgent.mockRestore()
-    })
-    const { textarea, shell } = bench({ draft: 'one line' })
-    Object.defineProperty(textarea, 'clientHeight', {
-      configurable: true,
-      get: () => { throw new Error('growing Safari input must not read layout') },
-    })
-    Object.defineProperty(textarea, 'scrollHeight', {
-      configurable: true,
-      get: () => { throw new Error('growing Safari input must not read layout') },
-    })
-
-    fireEvent.change(textarea, { target: { value: 'one line grows' } })
-
-    expect(shell.snapshot.draft).toBe('one line grows')
-  })
-
   it('an edit the composer performs itself scrolls the caret back into view', async () => {
     // Paste and cut suppress the native edit, so no engine reveals the caret
     // for them. jsdom has no layout: the rects are stubbed,
@@ -1191,6 +1289,106 @@ describe('decorations', () => {
     expect(shell.snapshot.occurrences).toHaveLength(1)
     // The draft carries exactly one placeholder char where the token was.
     expect(shell.snapshot.draft).toBe('参考 \uFFFC 内容')
+  })
+
+  it('a long-path chip shows the basename and carries the full path on the title/aria', () => {
+    const { view, shell } = bench()
+    const label = 'Assets/script/Logic/Activity/CFishingExpertSetActivity.cs'
+    act(() => {
+      shell.setDraft('看 @x 吧')
+      shell.insertReference(
+        { source: 'workspace-file', ref: `H:/repo/${label}`, label, clipboardText: `H:/repo/${label}` },
+        { start: 2, end: 4, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    const chip = view.container.querySelector<HTMLElement>('[data-decoration="chip"]')
+    // The visible cell keeps the basename, never a meaningless mid-path slice.
+    expect(chip?.textContent).toBe('CFishingExpertSetActivity.cs')
+    expect(chip?.title).toBe(label)
+    const remove = view.container.querySelector('[data-chip-remove]')
+    expect(remove?.getAttribute('aria-label')).toBe('移除引用 CFishingExpertSetActivity.cs')
+    // A basename this long needs a cell several steps wide, or the pill would
+    // ellipsize a name that had room.
+    const grow = view.container.querySelector<HTMLElement>('[data-chip-cell]')
+    expect(Number(grow?.dataset.chipCell)).toBeGreaterThanOrEqual(4)
+  })
+
+  it('a draft holding a chip runs at the taller chip line; a chip-free draft does not', () => {
+    const { view, shell } = bench()
+    // The line-height that holds the pill is published on ONE element and read
+    // by all three text layers, so the caret cannot drift away from the chips.
+    expect(view.container.querySelector<HTMLElement>('[data-chip-cell]')?.dataset.hasChip).toBeUndefined()
+    act(() => {
+      shell.setDraft('看 @x 吧')
+      shell.insertReference(
+        { source: 'workspace-file', ref: 'H:/repo/a.ts', label: 'a.ts', clipboardText: 'H:/repo/a.ts' },
+        { start: 2, end: 4, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    expect(view.container.querySelector<HTMLElement>('[data-chip-cell]')?.dataset.hasChip).toBe('true')
+    const remove = view.container.querySelector('[data-chip-remove]')
+    fireEvent.click(remove!)
+    expect(view.container.querySelector<HTMLElement>('[data-chip-cell]')?.dataset.hasChip).toBeUndefined()
+  })
+
+  it('the chip × splices that placeholder out of the draft (workspace-file path)', () => {
+    const { view, shell, textarea } = bench()
+    act(() => {
+      shell.setDraft('看 @src/a.ts 吧')
+      shell.insertReference(
+        { source: 'workspace-file', ref: 'H:/repo/src/a.ts', label: 'src/a.ts', clipboardText: 'H:/repo/src/a.ts' },
+        { start: 2, end: 11, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    expect(shell.snapshot.draft).toBe('看 \uFFFC 吧')
+    const remove = view.container.querySelector('[data-chip-remove]')
+    expect(remove?.getAttribute('aria-label')).toBe('移除引用 a.ts')
+    fireEvent.click(remove!)
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(shell.snapshot.draft).toBe('看  吧')
+    expect(view.container.querySelector('[data-decoration="chip"]')).toBeNull()
+    expect(textarea.value).toBe('看  吧')
+  })
+
+  it('× deletes only the clicked occurrence; a same-named sibling chip stays', () => {
+    const P = '\uFFFC'
+    const { view, shell } = bench()
+    act(() => {
+      shell.setDraft('/alp')
+      shell.insertReference(
+        { source: 'skill', ref: 'alpha', label: 'alpha', clipboardText: '/alpha' },
+        { start: 0, end: 4, draftRev: shell.snapshot.draftRev },
+      )
+      shell.setDraft(`${P} and /alp`, { start: 1, end: 1, insertedLength: 9 })
+      shell.insertReference(
+        { source: 'skill', ref: 'alpha', label: 'alpha', clipboardText: '/alpha' },
+        { start: 6, end: 10, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    expect(shell.snapshot.occurrences.map(o => o.occurrenceId)).toEqual([1, 2])
+    const first = view.container.querySelector('[data-chip-remove="1"]')
+    fireEvent.click(first!)
+    expect(shell.snapshot.occurrences).toEqual([expect.objectContaining({ occurrenceId: 2 })])
+    expect(shell.snapshot.draft.includes(P)).toBe(true)
+    expect(view.container.querySelectorAll('[data-decoration="chip"]')).toHaveLength(1)
+  })
+
+  it('a pointerdown on the textarea that lands on the × rect removes the chip', () => {
+    const { view, shell, textarea } = bench()
+    act(() => {
+      shell.setDraft('参考 @w1 内容')
+      shell.insertReference(
+        { source: 'subagent', ref: 'w1', label: '@w1', clipboardText: '@w1' },
+        { start: 3, end: 6, draftRev: shell.snapshot.draftRev },
+      )
+    })
+    const remove = view.container.querySelector<HTMLElement>('[data-chip-remove]')!
+    vi.spyOn(remove, 'getBoundingClientRect').mockReturnValue({
+      x: 10, y: 10, left: 10, top: 10, right: 24, bottom: 24, width: 14, height: 14, toJSON: () => ({}),
+    })
+    fireEvent.pointerDown(textarea, { clientX: 12, clientY: 12 })
+    expect(shell.snapshot.occurrences).toEqual([])
+    expect(shell.snapshot.draft).toBe('参考  内容')
   })
 
   it('a lexicon-matched plain token renders the text-ref mark', () => {

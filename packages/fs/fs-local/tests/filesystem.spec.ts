@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { constants as bufferConstants } from 'node:buffer'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -742,6 +743,80 @@ describe('editText', () => {
     expect(rejected).toHaveLength(1)
     expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: 'FS_STALE_VERSION' })
     expect(lockCount(fs)).toBe(0)
+  })
+})
+
+describe('mkdir / rename / delete / copy', () => {
+  it('mkdir creates one directory and rejects an existing target', async () => {
+    await fs.mkdir(await fs.resolve('fresh'))
+    expect((await fs.stat(await fs.resolve('fresh')))?.type).toBe('directory')
+    await expect(fs.mkdir(await fs.resolve('fresh'))).rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+  })
+
+  it('mkdir fails when the parent is missing rather than creating it', async () => {
+    await expect(fs.mkdir(await fs.resolve('missing-parent/child'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    expect(existsSync(join(dir, 'missing-parent'))).toBe(false)
+  })
+
+  it('rename moves a file and rejects an existing destination or missing source', async () => {
+    await writeFile(join(dir, 'from.txt'), 'moved')
+    await fs.rename(await fs.resolve('from.txt'), await fs.resolve('to.txt'))
+    expect(await readFile(join(dir, 'to.txt'), 'utf8')).toBe('moved')
+    expect(existsSync(join(dir, 'from.txt'))).toBe(false)
+
+    await writeFile(join(dir, 'taken.txt'), 'keep')
+    await expect(fs.rename(await fs.resolve('to.txt'), await fs.resolve('taken.txt')))
+      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+    await expect(fs.rename(await fs.resolve('gone.txt'), await fs.resolve('next.txt')))
+      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
+
+  it('rename of the same target to itself is FS_IO_ERROR', async () => {
+    await writeFile(join(dir, 'same.txt'), 'x')
+    const target = await fs.resolve('same.txt')
+    await expect(fs.rename(target, target)).rejects.toMatchObject({ code: 'FS_IO_ERROR' })
+  })
+
+  it('delete removes a file or a directory tree and rejects a missing target', async () => {
+    await writeFile(join(dir, 'gone.txt'), 'x')
+    await fs.delete(await fs.resolve('gone.txt'))
+    expect(existsSync(join(dir, 'gone.txt'))).toBe(false)
+
+    await mkdir(join(dir, 'tree', 'nested'), { recursive: true })
+    await writeFile(join(dir, 'tree', 'nested', 'a.txt'), 'a')
+    await fs.delete(await fs.resolve('tree'))
+    expect(existsSync(join(dir, 'tree'))).toBe(false)
+
+    await expect(fs.delete(await fs.resolve('gone.txt'))).rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
+
+  it('copy duplicates a file or directory and rejects an existing destination', async () => {
+    await writeFile(join(dir, 'src.txt'), 'copy-me')
+    await fs.copy(await fs.resolve('src.txt'), await fs.resolve('dst.txt'))
+    expect(await readFile(join(dir, 'dst.txt'), 'utf8')).toBe('copy-me')
+    expect(await readFile(join(dir, 'src.txt'), 'utf8')).toBe('copy-me')
+
+    await mkdir(join(dir, 'src-dir'))
+    await writeFile(join(dir, 'src-dir', 'inner.txt'), 'inner')
+    await fs.copy(await fs.resolve('src-dir'), await fs.resolve('dst-dir'))
+    expect(await readFile(join(dir, 'dst-dir', 'inner.txt'), 'utf8')).toBe('inner')
+
+    await expect(fs.copy(await fs.resolve('src.txt'), await fs.resolve('dst.txt')))
+      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+    await expect(fs.copy(await fs.resolve('missing.txt'), await fs.resolve('next.txt')))
+      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+  })
+
+  it('honors a pre-aborted signal on each mutation', async () => {
+    const aborted = AbortSignal.abort()
+    await expect(fs.mkdir(await fs.resolve('aborted-dir'), aborted)).rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await writeFile(join(dir, 'live.txt'), 'x')
+    await expect(fs.rename(await fs.resolve('live.txt'), await fs.resolve('renamed.txt'), aborted))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(fs.delete(await fs.resolve('live.txt'), aborted)).rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(fs.copy(await fs.resolve('live.txt'), await fs.resolve('copied.txt'), aborted))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    expect(existsSync(join(dir, 'live.txt'))).toBe(true)
   })
 })
 

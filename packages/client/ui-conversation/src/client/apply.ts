@@ -286,6 +286,14 @@ export function apply(ctx: Context): void {
       'conversation.input.model': { kind: 'single', scope: 'session' },
     },
     inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
+      // Optional-service convention (as with chatFileMentions): the composer
+      // knows a chip's path, never how to browse it. Absent face = no
+      // file-browser plugin composed, and the chip renders non-navigable
+      // instead of offering a gesture that would dead-end.
+      const revealer = ctx.get('workspaceReveal')
+      const revealReference = revealer === undefined
+        ? undefined
+        : (ref: string): void => { revealer.reveal(ref) }
       if (sessionId === undefined) {
         return {
           keyboard: undefined,
@@ -297,6 +305,7 @@ export function apply(ctx: Context): void {
           toggleCommandMenu: undefined,
           stop: undefined,
           command: undefined,
+          revealReference,
           hooks: { notices: ABSENT_NOTICES, lexicon: ABSENT_LEXICON, menuLauncher: ABSENT_MENU_LAUNCHER },
         }
       }
@@ -351,6 +360,7 @@ export function apply(ctx: Context): void {
           const result = await session.command(line)
           return result.ok && result.value.matched
         },
+        revealReference,
         hooks: {
           notices: shell.notices,
           lexicon: shell.lexicon,
@@ -446,6 +456,7 @@ export function apply(ctx: Context): void {
     locale: NS,
     children: {
       'conversation.details.tool': { kind: 'single', scope: 'session' },
+      'conversation.details.explorer': { kind: 'single', scope: 'session' },
     },
     store: chatStore,
     inject: (): DetailsInjected => ({

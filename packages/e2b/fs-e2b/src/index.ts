@@ -428,6 +428,84 @@ export class E2BFileSystem extends FileSystem {
     })
   }
 
+  override async mkdir(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(String(target.targetKey), async () => {
+      const existing = await this.probe(String(target.targetKey), target.displayPath, signal)
+      if (existing !== undefined) {
+        throw new FsError(`cannot mkdir "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      const parentPath = posix.dirname(String(target.targetKey))
+      const parent = await this.probe(parentPath, posix.dirname(target.displayPath), signal)
+      if (parent === undefined) throw new FsError(`cannot mkdir "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+      if (entryType(parent) !== 'directory') {
+        throw new FsError(`cannot mkdir "${target.displayPath}": not a directory`, 'FS_NOT_DIRECTORY')
+      }
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        const created = await sandbox.files.makeDir(String(target.targetKey), signalOpts(signal))
+        if (!created) throw new FsError(`cannot mkdir "${target.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      } catch (error: unknown) {
+        throw mapError(error, 'mkdir', target.displayPath, signal)
+      }
+    })
+  }
+
+  override async rename(source: FsTarget, destination: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withOrderedLocks(String(source.targetKey), String(destination.targetKey), async () => {
+      if (source.targetKey === destination.targetKey) {
+        throw new FsError(`cannot rename "${source.displayPath}": source and destination are the same`, 'FS_IO_ERROR')
+      }
+      const existing = await this.probe(String(source.targetKey), source.displayPath, signal)
+      if (existing === undefined) throw new FsError(`cannot rename "${source.displayPath}": not found`, 'FS_NOT_FOUND')
+      const dest = await this.probe(String(destination.targetKey), destination.displayPath, signal)
+      if (dest !== undefined) {
+        throw new FsError(`cannot rename "${destination.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        await sandbox.files.rename(String(source.targetKey), String(destination.targetKey), signalOpts(signal))
+      } catch (error: unknown) {
+        throw mapError(error, 'rename', source.displayPath, signal)
+      }
+    })
+  }
+
+  override async delete(target: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withLock(String(target.targetKey), async () => {
+      const existing = await this.probe(String(target.targetKey), target.displayPath, signal)
+      if (existing === undefined) throw new FsError(`cannot delete "${target.displayPath}": not found`, 'FS_NOT_FOUND')
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        await sandbox.files.remove(String(target.targetKey))
+      } catch (error: unknown) {
+        throw mapError(error, 'delete', target.displayPath, signal)
+      }
+    })
+  }
+
+  override async copy(source: FsTarget, destination: FsTarget, signal?: AbortSignal): Promise<void> {
+    return this.withOrderedLocks(String(source.targetKey), String(destination.targetKey), async () => {
+      if (source.targetKey === destination.targetKey) {
+        throw new FsError(`cannot copy "${source.displayPath}": source and destination are the same`, 'FS_IO_ERROR')
+      }
+      const existing = await this.probe(String(source.targetKey), source.displayPath, signal)
+      if (existing === undefined) throw new FsError(`cannot copy "${source.displayPath}": not found`, 'FS_NOT_FOUND')
+      const dest = await this.probe(String(destination.targetKey), destination.displayPath, signal)
+      if (dest !== undefined) {
+        throw new FsError(`cannot copy "${destination.displayPath}": already exists`, 'FS_ALREADY_EXISTS')
+      }
+      try {
+        const sandbox = await this.ctx.e2b.getSandbox()
+        await sandbox.commands.run(
+          `cp -a -- ${quoteE2BShellArg(String(source.targetKey))} ${quoteE2BShellArg(String(destination.targetKey))}`,
+          commandOpts(signal),
+        )
+      } catch (error: unknown) {
+        throw mapError(error, 'copy', source.displayPath, signal)
+      }
+    })
+  }
+
   private async withLock<T>(targetKey: string, operation: () => Promise<T>): Promise<T> {
     const prior = this.locks.get(targetKey) ?? Promise.resolve()
     const run = prior.then(operation, operation)
@@ -438,6 +516,12 @@ export class E2BFileSystem extends FileSystem {
     } finally {
       if (this.locks.get(targetKey) === tail) this.locks.delete(targetKey)
     }
+  }
+
+  private async withOrderedLocks<T>(left: string, right: string, operation: () => Promise<T>): Promise<T> {
+    if (left === right) return this.withLock(left, operation)
+    const [first, second] = left < right ? [left, right] : [right, left]
+    return this.withLock(first, () => this.withLock(second, operation))
   }
 
   private async canonicalPath(sandbox: Sandbox, path: string, signal?: AbortSignal): Promise<string> {

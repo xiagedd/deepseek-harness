@@ -45,6 +45,7 @@ export interface RpcErrorDetailsMap {
   'directory-exists': { path: string }
   'directory-create-failed': { path: string }
   'directory-picker-unavailable': { capability: string }
+  'fs-failed': { path: string; reason: string }
   'agent-preset-read-only': { agentPreset: string; reason: string }
   'agent-preset-locked': { sessionId: SessionId; agentPreset: string }
   'agent-preset-conflict': { sessionId: SessionId; requestedPreset: string; existingPreset?: string }
@@ -63,6 +64,12 @@ export interface RpcErrorDetailsMap {
    * read-only provider, or storage failure); the message is the seam's text.
    */
   'settings-rejected': { ns: string }
+  /**
+   * A settings namespace exists in the seam but is outside the configuration
+   * plane's model-provider boundary, so this proxy neither reads nor writes
+   * it; the message names the namespace.
+   */
+  'settings-not-exposed': { ns: string }
   /**
    * A settings write carried an `expectedRevision` the namespace has already
    * moved past: another writer (tab, editor, or an external file edit) landed

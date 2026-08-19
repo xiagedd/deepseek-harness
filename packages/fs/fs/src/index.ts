@@ -80,8 +80,9 @@ declare module '@deepseek-ai/cordis' {
 /**
  * Abstract filesystem provider. Targets must preserve identity across aliases;
  * reads expose regular UTF-8 text or typed errors, listings are stable and
- * content-free, and mutations are atomic. Optional guards add stale protection
- * without changing the unguarded provider contract.
+ * content-free, and mutations (text write/edit plus mkdir/rename/delete/copy)
+ * are atomic. Optional guards add stale protection without changing the
+ * unguarded provider contract.
  */
 export abstract class FileSystem extends Service {
   constructor(ctx: Context) {
@@ -247,6 +248,70 @@ export abstract class FileSystem extends Service {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome>
+
+  /**
+   * Create one directory at `target`. The parent must already exist; existing
+   * targets fail with `FS_ALREADY_EXISTS` rather than succeeding as a no-op.
+   * @param target - the resolved directory to create.
+   * @param signal - aborts before the directory is created.
+   * @param sandboxPolicy - the per-call mode and workspace root this mkdir
+   *   runs under; a sandboxing backend fences the create by it, the bare
+   *   backend ignores it. Omit to leave the backend its own default.
+   */
+  abstract mkdir(
+    target: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void>
+
+  /**
+   * Atomically rename/move `source` to `destination`. An existing destination
+   * fails with `FS_ALREADY_EXISTS`; a missing source fails with `FS_NOT_FOUND`.
+   * @param source - the resolved target to move.
+   * @param destination - the resolved destination path (may be absent).
+   * @param signal - aborts before the rename takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this rename
+   *   runs under; a sandboxing backend fences both paths by it, the bare
+   *   backend ignores it. Omit to leave the backend its own default.
+   */
+  abstract rename(
+    source: FsTarget,
+    destination: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void>
+
+  /**
+   * Delete a file or directory. Directories are removed recursively. A missing
+   * target fails with `FS_NOT_FOUND` rather than succeeding as a no-op.
+   * @param target - the resolved target to delete.
+   * @param signal - aborts before the deletion takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this delete
+   *   runs under; a sandboxing backend fences the delete by it, the bare
+   *   backend ignores it. Omit to leave the backend its own default.
+   */
+  abstract delete(
+    target: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void>
+
+  /**
+   * Copy a file or directory to `destination`. Directories are copied
+   * recursively. An existing destination fails with `FS_ALREADY_EXISTS`.
+   * @param source - the resolved target to copy.
+   * @param destination - the resolved destination path (must be absent).
+   * @param signal - aborts before the copy takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this copy
+   *   runs under; a sandboxing backend fences both paths by it, the bare
+   *   backend ignores it. Omit to leave the backend its own default.
+   */
+  abstract copy(
+    source: FsTarget,
+    destination: FsTarget,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void>
 }
 
 export default FileSystem

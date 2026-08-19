@@ -122,6 +122,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * instead; this one is the whole panel.
      */
     'conversation.details.tool': { kind: 'single'; scope: 'session'; owner: DetailsToolOwnerProps }
+    'conversation.details.explorer': { kind: 'single'; scope: 'session' }
     /**
      * The composer takeover chain: entries are selector-routed replacements
      * of the default InputBar. Declared by this package's 'conversation'
@@ -306,10 +307,30 @@ export interface ChatFileMentions {
   forClosing(owner: TurnTailOwnerProps): MarkdownFileMentions | undefined
 }
 
+/**
+ * Optional file-browser reveal face, consumed via `ctx.get('workspaceReveal')`
+ * (optional-service convention): the composer asks it to show the file a
+ * reference chip stands for. The provider owns every browser concept — which
+ * panel to open, how deep to expand, what "highlighted" looks like — so an
+ * absent service (no file-browser plugin composed) simply leaves reference
+ * chips non-navigable.
+ */
+export interface WorkspaceReveal {
+  /**
+   * Show one referenced path in the file browser.
+   * @param ref - Absolute reference as inserted, i.e. a workspace path that may
+   * carry a `:<start>-<end>` line suffix; the provider decides what a path
+   * outside its tree, or one that no longer exists, does.
+   */
+  reveal(ref: string): void
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Prose file-mention provider (ui-deliverables); reach via ctx.get — optional. */
     chatFileMentions: ChatFileMentions
+    /** File-browser reveal face (ui-explorer); reach via ctx.get — optional. */
+    workspaceReveal: WorkspaceReveal
   }
 }
 
@@ -517,6 +538,13 @@ export interface ComposerBarInjected {
    */
   command: ((line: string) => Promise<boolean>) | undefined
   /**
+   * Show the workspace file a reference chip stands for in the host's file
+   * browser. Absent while no browser plugin provides
+   * {@link WorkspaceReveal} — the chip then keeps its remove control and stops
+   * answering the pointer, so the gesture never dead-ends.
+   */
+  revealReference: ((ref: string) => void) | undefined
+  /**
    * Registrant hooks compartment: the renderer binds these to
    * useNotices/useLexicon (static absent sources without a session — hook
    * order stays constant).
@@ -722,7 +750,7 @@ export interface DetailsInjected {
 }
 
 /** Full details-slot props: selection store, Tool output seat, injected close callback, and locale. */
-export type DetailsSlotProps = PropsRuntime<'details'> & PropsRenderSlots<'conversation.details.tool'>
+export type DetailsSlotProps = PropsRuntime<'details'> & PropsRenderSlots<'conversation.details.tool' | 'conversation.details.explorer'>
   & PropsStore<ChatStore> & DetailsInjected & PropsLocale<'conversation'>
 
 /** Owner share common to the hero / New-Session Workspace pickers. */

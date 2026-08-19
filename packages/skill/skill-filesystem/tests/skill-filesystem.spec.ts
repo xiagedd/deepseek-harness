@@ -136,6 +136,22 @@ class TestFileSystem extends FileSystem {
   override async editText(_target: FsTarget, _request: FsEditRequest): Promise<FsEditOutcome> {
     throw new Error('not needed in skill tests')
   }
+
+  override async mkdir(): Promise<void> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async rename(): Promise<void> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async delete(): Promise<void> {
+    throw new Error('not needed in skill tests')
+  }
+
+  override async copy(): Promise<void> {
+    throw new Error('not needed in skill tests')
+  }
 }
 
 async function setupLocal(home: string, config: Partial<SkillFileSystem.Config> = {}): Promise<Context> {

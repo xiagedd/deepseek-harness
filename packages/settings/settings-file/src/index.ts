@@ -3,7 +3,8 @@
  * harness home carries every namespace section; external edits hot-publish
  * through the seam, and every write re-reads the document under a
  * cross-process writer lock before patching it as a comment-preserving
- * leaf-level diff.
+ * leaf-level diff. A non-empty prior document is copied to `<path>.bak`
+ * immediately before the atomic replace.
  * @module @deepseek-ai/dsh-settings-file
  */
 
@@ -220,6 +221,15 @@ export class FileSettingsProvider extends SettingsProvider {
       // on-disk document fails the write loud instead of silently overwriting
       // a user's manual edit.
       await this.reconcileFromDisk()
+      // Keep one recoverable sibling of the last good document before the
+      // atomic replace. Empty or absent documents skip the backup so a first
+      // create does not leave a meaningless `.bak`.
+      if (this.text !== undefined && this.text.length > 0) {
+        await writeFileAtomic(`${this.spec.filename}.bak`, this.text, {
+          mode: 0o600,
+          dirMode: 0o700,
+        })
+      }
       const output = this.spec.format === 'yaml'
         ? this.renderYaml(ns, section)
         : this.renderJson(ns, section)

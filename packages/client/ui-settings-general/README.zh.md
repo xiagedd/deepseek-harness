@@ -8,6 +8,8 @@
 
 回环浏览器通过 `settings.describe` 加载提供方的 `hasDocument` 能力，且只有在 Host 确认可准备好一份由提供方持有的本地文档时才渲染**打开配置文件**。该操作发送无路径参数且仅限回环访问的 `settings.openDocument` 请求；Host 会再次解析提供方路径、在文档缺失时将其创建出来，并交给原生文本编辑器（macOS 上使用 `open -t`，绕过浏览器文件关联；Linux 和 Windows 上使用桌面文件关联；WSL 上经 `wslpath -w` 转换后使用 Windows 文件关联）。打开失败时该操作仍可使用，并渲染本地化错误。临时读取失败或 Host 拓扑变化后，重新打开对话框或重新连接会刷新可用性。远程浏览器从不注册该操作，也从不发起这项特权设置读取。
 
+「通用」分区还持有仅限回环的**重启 Web 服务**行。确认警告后调用 `host.restartWeb`（只能带可选端口）。Host 先返回 `{ accepted, port }`，再分离启动 `scripts/restart-dsh-web.mjs --port <n>`；页面等到源站恢复或超时后刷新。远程浏览器从不注册该行。
+
 宿主端在用户设置 seam 中注册 `ui-onboarding`。`ui-settings-models` 提供的欢迎步骤通过既有公开 settings 边界读写其中的 `welcomeNoticeVersion`；外壳本身仍不持有产品策略。
 
 ## 模型体验
@@ -20,4 +22,5 @@
 
 ## 已知限制与暂缓事项
 
-- 「通用」分区没有内置行；每一行仅在其所属功能插件挂载时出现。
+- 远程（非回环）浏览器从不注册「重启 Web 服务」行，也不注册打开配置文件操作。
+- `host.restartWeb` 只存在于已经加载该方法的 Host 进程。与更旧进程对话的标签页必须先在终端运行一次 `pnpm run web:restart`，之后按钮才能成功。

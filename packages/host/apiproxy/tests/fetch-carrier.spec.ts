@@ -156,8 +156,38 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
       async createDirectory(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/new' } } }
       },
+      async listEntries(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w', entries: [] } } }
+      },
+      async searchEntries(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { entries: [], truncated: false } } }
+      },
+      async mkdir(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/dir' } } }
+      },
+      async rename(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/renamed' } } }
+      },
+      async delete(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { deleted: true as const } } }
+      },
+      async copy(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: '/w/copy' } } }
+      },
+      async writeText(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: request.payload.path } } }
+      },
+      async readText(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { path: request.payload.path, content: 'hello' } } }
+      },
       async openPath(request) {
         return { rpcId: request.rpcId, result: { ok: true, value: { opened: true as const } } }
+      },
+      async revealPath(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { revealed: true as const } } }
+      },
+      async restartWeb(request) {
+        return { rpcId: request.rpcId, result: { ok: true, value: { accepted: true as const, port: request.payload.port ?? 3080 } } }
       },
     },
     workspace: {
@@ -412,6 +442,26 @@ describe('unary round trip (handler ⇄ client, no network)', () => {
     expect(created.result).toEqual({ ok: true, value: { path: '/w/new' } })
   })
 
+  it('round-trips workspace file-tree listing and mutations through the wire form', async () => {
+    const c = client()
+    expect((await c.host.listEntries({ path: '/w' })).result)
+      .toEqual({ ok: true, value: { path: '/w', entries: [] } })
+    expect((await c.host.mkdir({ path: '/w/dir' })).result)
+      .toEqual({ ok: true, value: { path: '/w/dir' } })
+    expect((await c.host.rename({ from: '/w/a', to: '/w/b' })).result)
+      .toEqual({ ok: true, value: { path: '/w/renamed' } })
+    expect((await c.host.delete({ path: '/w/b' })).result)
+      .toEqual({ ok: true, value: { deleted: true } })
+    expect((await c.host.copy({ from: '/w/a', to: '/w/copy' })).result)
+      .toEqual({ ok: true, value: { path: '/w/copy' } })
+    expect((await c.host.writeText({ path: '/w/empty.txt' })).result)
+      .toEqual({ ok: true, value: { path: '/w/empty.txt' } })
+    expect((await c.host.writeText({ path: '/w/a.txt', content: 'hi' })).result)
+      .toEqual({ ok: true, value: { path: '/w/a.txt' } })
+    expect((await c.host.readText({ path: '/w/a.txt' })).result)
+      .toEqual({ ok: true, value: { path: '/w/a.txt', content: 'hello' } })
+  })
+
   it('round-trips host.openPath through the wire form', async () => {
     const api = fakeApi()
     let opened: string | undefined
@@ -422,6 +472,16 @@ describe('unary round trip (handler ⇄ client, no network)', () => {
     const response = await client(api).host.openPath({ path: '/tmp/a.txt' })
     expect(opened).toBe('/tmp/a.txt')
     expect(response.result).toEqual({ ok: true, value: { opened: true } })
+  })
+
+  it('round-trips host.restartWeb and rejects extra command keys', async () => {
+    const api = fakeApi()
+    const accepted = await client(api).host.restartWeb({ port: 3080 })
+    expect(accepted.result).toEqual({ ok: true, value: { accepted: true, port: 3080 } })
+    const denied = await client(api).host.restartWeb({ port: 3080, command: 'rm -rf /' } as never)
+    expect(denied.result.ok).toBe(false)
+    if (denied.result.ok) throw new Error('unreachable')
+    expect(denied.result.error.code).toBe('bad-request')
   })
 
   it('round-trips skill.list through the wire form', async () => {

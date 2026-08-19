@@ -25,6 +25,9 @@ import { CloseLabel, HeaderContent, TriggerContent } from './chrome.tsx'
 import { GeneralSection } from './GeneralSection.tsx'
 import { SettingsDocumentAction } from './SettingsDocumentAction.tsx'
 import type { SettingsDocumentActionInjected } from './SettingsDocumentAction.tsx'
+import { RestartWebRow } from './RestartWebRow.tsx'
+import type { RestartWebRowInjected } from './RestartWebRow.tsx'
+import { waitUntilOriginHealthy } from './restart-web-wait.ts'
 import { refreshDocumentIfLoaded, SettingsDocumentStore } from './settings-document-store.ts'
 import { en, zh, type SettingsKey } from './locales.ts'
 
@@ -35,6 +38,7 @@ export type {
   GeneralSectionComponentProps,
 } from './GeneralSection.tsx'
 export type { SettingsDocumentActionInjected, SettingsDocumentActionProps } from './SettingsDocumentAction.tsx'
+export type { RestartWebCallResult, RestartWebRowInjected, RestartWebRowProps } from './RestartWebRow.tsx'
 export type { SettingsDocumentState } from './settings-document-store.ts'
 export { SettingsDocumentStore } from './settings-document-store.ts'
 export type { SettingsKey } from './locales.ts'
@@ -175,4 +179,32 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     children: { 'settings.general.item': { kind: 'list', scope: 'root' } },
   }, GeneralSection))
+  if (connection.isLoopback) {
+    ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+      name: 'settings.general.item',
+      id: 'restart-web',
+      order: 90,
+      locale: NS,
+      inject: (): RestartWebRowInjected => ({
+        restartWeb: async (payload) => {
+          try {
+            const response = await connection.api.host.restartWeb(payload)
+            if (!response.result.ok) {
+              return { ok: false, message: response.result.error.message }
+            }
+            return { ok: true, port: response.result.value.port }
+          } catch (error: unknown) {
+            const detail = error instanceof Error ? error.message : String(error)
+            const missing = /404|not found|unknown method/i.test(detail)
+            return {
+              ok: false,
+              message: missing ? t('restartWeb.error.unavailable') : detail,
+            }
+          }
+        },
+        waitUntilHealthy: timeoutMs => waitUntilOriginHealthy({ timeoutMs }),
+        reload: () => { globalThis.location.reload() },
+      }),
+    }, RestartWebRow))
+  }
 }

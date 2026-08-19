@@ -94,6 +94,24 @@
     - id: plugin-inventory
       name: '@deepseek-ai/dsh-host-plugin-inventory'
 
+    # MCP / Skills / Rules inventories + matching Settings pages (and
+    # ui-settings-ignore later in this insert). In-box web keeps these rows so
+    # the default web profile does not need a second overlay. Out-of-tree web
+    # profiles whose web-app lacks them mount `@deepseek-ai/dsh-web-local-tools`
+    # instead. Do not hang that overlay on top of this in-box insert: duplicate
+    # ids load twice and Settings slot registration fails loud.
+    # MCP client Loader projection + enable toggles for Settings.
+    - id: mcp-inventory
+      name: '@deepseek-ai/dsh-host-mcp-inventory'
+
+    # Filesystem skill inventory + model-invocation toggles for Settings.
+    - id: skill-inventory
+      name: '@deepseek-ai/dsh-host-skill-inventory'
+
+    # AGENTS.md-compatible rules inventory + create for Settings.
+    - id: rules-inventory
+      name: '@deepseek-ai/dsh-host-rules-inventory'
+
     # The API gateway: the transport-agnostic dispatch face every client shape
     # shares. The base layer's agent-default-model service owns the default model.
     - id: api-gateway
@@ -195,6 +213,18 @@
     - id: ui-settings-plugin-inventory
       name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
 
+    - id: ui-settings-mcp
+      name: '@deepseek-ai/dsh-client-ui-settings-mcp'
+
+    - id: ui-settings-skills
+      name: '@deepseek-ai/dsh-client-ui-settings-skills'
+
+    - id: ui-settings-rules
+      name: '@deepseek-ai/dsh-client-ui-settings-rules'
+
+    - id: ui-settings-ignore
+      name: '@deepseek-ai/dsh-client-ui-settings-ignore'
+
     - id: ui-conversation
       name: '@deepseek-ai/dsh-client-ui-conversation'
 
@@ -219,8 +249,12 @@
     - id: ui-workspace
       name: '@deepseek-ai/dsh-client-ui-workspace'
 
+    # Workspace file tree in the details explorer child seat.
+    - id: ui-explorer
+      name: '@deepseek-ai/dsh-client-ui-explorer'
+
     # Input triggers: the '/' | '@' pipeline (ui-input-trigger), the command surface over
-    # it (ui-commands), and the two reference sources (ui-skill / ui-subagent).
+    # it (ui-commands), and the reference sources (ui-skill / ui-subagent / ui-workspace-file).
     - id: ui-input-trigger
       name: '@deepseek-ai/dsh-client-ui-input-trigger'
 
@@ -232,6 +266,9 @@
 
     - id: ui-subagent
       name: '@deepseek-ai/dsh-client-ui-subagent'
+
+    - id: ui-workspace-file
+      name: '@deepseek-ai/dsh-client-ui-workspace-file'
 
     # Background jobs: the session-header list over the jobsBySession mirror.
     - id: ui-jobs

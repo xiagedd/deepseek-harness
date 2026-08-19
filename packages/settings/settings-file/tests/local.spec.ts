@@ -238,6 +238,31 @@ describe('persist', () => {
     expect(written).toContain('theme: light')
   })
 
+  it('backs up the prior document and keeps sibling namespaces when one key changes', async () => {
+    const dir = await tempDir()
+    const path = join(dir, 'settings.yaml')
+    const prior = [
+      'permission:',
+      '  defaultPreset: danger-full-access',
+      'ui-theme:',
+      '  theme: dark',
+      'locale:',
+      '  preference: zh',
+      '',
+    ].join('\n')
+    await writeFile(path, prior)
+    const ctx = await boot({ path, watch: false })
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
+    await scope.update({ theme: 'light' })
+
+    const written = await readFile(path, 'utf8')
+    expect(written).toContain('defaultPreset: danger-full-access')
+    expect(written).toContain('preference: zh')
+    expect(written).toContain('theme: light')
+    expect(written).not.toMatch(/ui-theme:[\s\S]*theme: dark/)
+    expect(await readFile(`${path}.bak`, 'utf8')).toBe(prior)
+  })
+
   it('keeps comments inside the section when a sibling key changes', async () => {
     const dir = await tempDir()
     const path = join(dir, 'settings.yaml')

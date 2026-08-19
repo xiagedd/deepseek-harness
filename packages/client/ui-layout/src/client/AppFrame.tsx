@@ -1,16 +1,17 @@
 /**
- * Three-column shell frame, registered into the built-in 'root' slot (the web
+ * Four-column shell frame, registered into the built-in 'root' slot (the web
  * shell renders only 'root'). Owns the grid tracks (sidebar | center |
- * details), the drag handles (pointer capture + rAF throttle), the concession
- * chain (columns.ts), and the child-slot render decisions: the sidebar slot
- * renders HERE with live parameters from the concession solve, and the
- * session-aware occupants render in fixed column positions; strict entries
- * gate themselves on current-session availability while session-maybe
+ * preview | details — the file preview sits to the LEFT of the file tree),
+ * the drag handles (pointer capture + rAF throttle), the
+ * concession chain (columns.ts), and the child-slot render decisions: the
+ * sidebar slot renders HERE with live parameters from the concession solve,
+ * and the session-aware occupants render in fixed column positions; strict
+ * entries gate themselves on current-session availability while session-maybe
  * entries retain identity. Pure component: everything arrives
  * through the three framework shares — zero cordis or framework imports,
  * zero self-made hooks.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
@@ -20,7 +21,7 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'preview' | 'shell.overlay'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
 
 /** Center column grid item (session-body building block). */
@@ -33,11 +34,16 @@ function DetailsColumn(props: { children?: ReactNode }) {
   return <div className={css.detailsCol}>{props.children}</div>
 }
 
+/** Preview column grid item; width 0 keeps the subtree mounted (never unmount on close). */
+function PreviewColumn(props: { children?: ReactNode }) {
+  return <div className={css.previewCol}>{props.children}</div>
+}
+
 /**
  * One drag handle: pointer capture, rAF-throttled dx reports against the drag-start origin.
  * `side` keys the hover-reveal CSS to the owning column.
  */
-function DragHandle(props: { side: 'sidebar' | 'details'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
+function DragHandle(props: { side: 'sidebar' | 'details' | 'preview'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
   const [dragging, setDragging] = useState(false)
   const origin = useRef(0)
   const latest = useRef(0)
@@ -83,7 +89,7 @@ function DragHandle(props: { side: 'sidebar' | 'details'; left: number; onStart:
   )
 }
 
-/** The three-column frame (see module doc). */
+/** The four-column frame (see module doc). */
 export function AppFrame({
   useStore,
   useSessions,
@@ -91,21 +97,14 @@ export function AppFrame({
   renderSlot,
 }: AppFrameProps) {
   const panels = useStore(s => s)
-  const detailsSession = useSessions((s) => {
-    const current = s.current
-    return current !== undefined && s.byId[current]?.blank === false ? current : undefined
-  })
+  // Explorer + CM6 preview are global capabilities: any current session
+  // (including blank) may show them. Only the homepage — no current session —
+  // keeps the details/preview tracks at 0. Switching Session / workspace does
+  // not close the columns; ExplorerPanel rebinds to the new session cwd and
+  // browse state stays bucketed per cwd (never shared across workspaces).
+  const detailsSession = useSessions(s => s.current)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
-
-  const lastSession = useRef(detailsSession)
-  useLayoutEffect(() => {
-    if (detailsSession === undefined) return
-    if (lastSession.current !== undefined && lastSession.current !== detailsSession) {
-      actions.closeDetails()
-    }
-    lastSession.current = detailsSession
-  }, [actions, detailsSession])
 
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useEffect(() => {
@@ -139,7 +138,9 @@ export function AppFrame({
   const sidebarPreference = sidebarCollapsed
     ? 0
     : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
-  const cols = computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
+  const detailsPreference = detailsSession === undefined ? 0 : panels.details
+  const previewPreference = detailsSession === undefined ? 0 : panels.preview
+  const cols = computeColumns(viewport, sidebarPreference, detailsPreference, previewPreference)
   const colsRef = useRef(cols)
   colsRef.current = cols
 
@@ -148,26 +149,32 @@ export function AppFrame({
   // it stays frozen for the whole gesture so dx deltas do not compound.
   const sidebarBase = useRef(0)
   const detailsBase = useRef(0)
+  const previewBase = useRef(0)
   // Track-level transitions pause for the whole gesture: eased tracks would
   // detach the column edge from the pointer (AppFrame.module.css).
   const [dragging, setDragging] = useState(false)
   const onDragEnd = useCallback(() => { setDragging(false) }, [])
   const onSidebarStart = useCallback(() => { sidebarBase.current = colsRef.current.sidebar; setDragging(true) }, [])
   const onDetailsStart = useCallback(() => { detailsBase.current = colsRef.current.details; setDragging(true) }, [])
+  const onPreviewStart = useCallback(() => { previewBase.current = colsRef.current.preview; setDragging(true) }, [])
   const onSidebarDrag = useCallback((dx: number) => {
     actions.setSidebar(sidebarBase.current + dx)
   }, [actions])
   const onDetailsDrag = useCallback((dx: number) => {
     actions.setDetails(detailsBase.current - dx)
   }, [actions])
+  const onPreviewDrag = useCallback((dx: number) => {
+    actions.setPreview(previewBase.current - dx)
+  }, [actions])
 
   return (
     <div
       ref={frameRef}
       className={css.frame}
-      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` }}
+      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.preview}px ${cols.details}px` }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-details-collapsed={cols.details === 0 || undefined}
+      data-preview-collapsed={cols.preview === 0 || undefined}
       data-dragging={dragging || undefined}
     >
       <div className={css.sidebarCol}>
@@ -182,12 +189,13 @@ export function AppFrame({
         })}
       </div>
       <>
-        {/* Both column occupants stay at fixed tree positions from first
+        {/* Column occupants stay at fixed tree positions from first
             paint — no loading gate: a bare status line reads worse than
             the shell's own pending rendering. The conversation
-            is session-maybe; the strict details entry naturally renders
-            empty while no session is current. */}
+            is session-maybe; the strict details/preview entries naturally
+            render empty while no session is current. */}
         <CenterColumn>{renderSlot('conversation', {})}</CenterColumn>
+        <PreviewColumn>{renderSlot('preview', {})}</PreviewColumn>
         <DetailsColumn>{renderSlot('details', {})}</DetailsColumn>
       </>
       <div className={css.overlayLayer} data-shell-overlay>
@@ -195,6 +203,9 @@ export function AppFrame({
       </div>
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
       {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {/* Preview sits left of the tree: its handle straddles the center|preview
+          border; the details handle straddles the preview|details border. */}
+      {cols.preview > 0 && <DragHandle side="preview" left={viewport - cols.details - cols.preview} onStart={onPreviewStart} onDrag={onPreviewDrag} onEnd={onDragEnd} />}
       {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
     </div>
   )

@@ -8,6 +8,8 @@ import { CloseLabel, HeaderContent, TriggerContent } from '../src/client/chrome.
 import type { TriggerContentProps } from '../src/client/chrome.tsx'
 import { SettingsDocumentAction } from '../src/client/SettingsDocumentAction.tsx'
 import { SettingsDocumentStore } from '../src/client/settings-document-store.ts'
+import type { RestartWebRowInjected, RestartWebRowProps } from '../src/client/RestartWebRow.tsx'
+import { RestartWebRow } from '../src/client/RestartWebRow.tsx'
 import { en } from '../src/client/locales.ts'
 
 afterEach(cleanup)
@@ -147,5 +149,56 @@ describe('SettingsDocumentAction', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open configuration file' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Could not open configuration file')
     expect(screen.getByRole('button', { name: 'Open configuration file' })).toBeTruthy()
+  })
+})
+
+describe('RestartWebRow', () => {
+  const unusedHook = (() => { throw new Error('unused by settings-general components') }) as never
+  const kit = { useSessions: unusedHook, useWorkspaces: unusedHook }
+  const t: RestartWebRowProps['t'] = key => (en as Record<string, string>)[key] ?? key
+
+  function mount(over: Partial<RestartWebRowInjected> = {}) {
+    const restartWeb = over.restartWeb ?? vi.fn(async () => ({ ok: true as const, port: 3080 }))
+    const waitUntilHealthy = over.waitUntilHealthy ?? vi.fn(async () => true)
+    const reload = over.reload ?? vi.fn()
+    render(<RestartWebRow {...kit} t={t} restartWeb={restartWeb} waitUntilHealthy={waitUntilHealthy} reload={reload} />)
+    return { restartWeb, waitUntilHealthy, reload }
+  }
+
+  async function confirmRestart() {
+    fireEvent.click(screen.getByRole('button', { name: 'Restart Web' }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart' }))
+  }
+
+  it('confirms, waits for the new origin, then reloads', async () => {
+    const view = mount()
+    await confirmRestart()
+    await waitFor(() => { expect(view.restartWeb).toHaveBeenCalledWith({}) })
+    await waitFor(() => { expect(view.reload).toHaveBeenCalledOnce() })
+    expect(view.waitUntilHealthy).toHaveBeenCalled()
+  })
+
+  it('shows a Host refusal without waiting', async () => {
+    const restartWeb = vi.fn(async () => ({ ok: false as const, message: 'scripts/restart-dsh-web.mjs missing' }))
+    const waitUntilHealthy = vi.fn(async () => true)
+    mount({ restartWeb, waitUntilHealthy })
+    await confirmRestart()
+    expect((await screen.findByRole('alert')).textContent).toBe('scripts/restart-dsh-web.mjs missing')
+    expect(waitUntilHealthy).not.toHaveBeenCalled()
+  })
+
+  it('shows a timeout when the origin never recovers', async () => {
+    mount({ waitUntilHealthy: vi.fn(async () => false) })
+    await confirmRestart()
+    expect((await screen.findByRole('alert')).textContent).toContain('Timed out waiting for the new server')
+  })
+
+  it('cancels the confirmation without calling Host', async () => {
+    const view = mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Restart Web' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(view.restartWeb).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Restart Web' })).toBeTruthy()
   })
 })

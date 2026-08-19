@@ -96,6 +96,10 @@ class FakeFs extends FileSystem {
     this.files.set(target.targetKey, after)
     return { version: FsVersion('v3'), before: content, after }
   }
+  override async mkdir(): Promise<void> {}
+  override async rename(): Promise<void> {}
+  override async delete(): Promise<void> {}
+  override async copy(): Promise<void> {}
 }
 
 async function setup() {
